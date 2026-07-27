@@ -706,11 +706,13 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
     }
 
 
-def _dead_code_start():  # pragma: no cover
-    """Everything below until _dead_code_end was the OLD matching logic."""
+# OLD template-match loop removed (replaced by component_match_pipeline)
+def _dead_code_placeholder():  # pragma: no cover
+    """Placeholder — old matching logic deleted."""
 
-    return  # old matching code removed
-    if False:
+    for asset in symbol_assets:
+        match = template_match_symbol(label_crop, asset, crop_bounds)
+        if match:
             # Reject too-small matches (<2% of label)
             if match['w'] < MIN_SYMBOL_SIZE or match['h'] < MIN_SYMBOL_SIZE:
                 reason = f"too small ({match['w']:.4f}x{match['h']:.4f})"
@@ -1067,7 +1069,7 @@ async def api_test_generate(label_id: str):
 
         steps.append(f"4. Found label: {lab['id']}")
         steps.append(f"5. Symbols: {len(lab['symbols'])}")
-        steps.append(f"6. Text spans: {len(lab['text_spans'])}")
+        steps.append(f"6. Text region: {lab.get('text_region')}")
 
         # Check symbol types
         for i, sym in enumerate(lab['symbols']):
