@@ -546,18 +546,28 @@ async def api_generate(label_id: str, dpi: int = 600):
             avail = [l['id'] for l in c['labels']]
             return JSONResponse(content={"error": f"Not found: {label_id}", "available": avail}, status_code=404)
 
-        # Encode matched symbol assets as base64 for frontend rendering
+        # Use pre-encoded base64 (no numpy conversion at request time)
         sym_images = {}
         for sym in lab['symbols']:
             asset = next((a for a in c['assets'] if a['file'] == sym['asset']), None)
-            if asset is not None and asset.get('image') is not None:
-                try:
-                    img = Image.fromarray(asset['image'])
-                    buf = io.BytesIO()
-                    img.save(buf, format='PNG')
-                    sym_images[sym['asset']] = base64.b64encode(buf.getvalue()).decode()
-                except Exception as enc_err:
-                    log.error(f"Image encode error {sym['asset']}: {enc_err}")
+            if asset and asset.get('image_b64'):
+                sym_images[sym['asset']] = asset['image_b64']
+
+        # Filter text: exclude spans overlapping matched symbol regions
+        syms = lab['symbols']
+        filtered_texts = []
+        for tf in lab['text_spans']:
+            tx, ty = float(tf.get('x', 0)), float(tf.get('y', 0))
+            overlaps = False
+            for s in syms:
+                sx, sy = float(s.get('x', 0)), float(s.get('y', 0))
+                sw, sh = float(s.get('w', 0)), float(s.get('h', 0))
+                if (tx >= sx - 0.02 and tx <= sx + sw + 0.02 and
+                    ty >= sy - 0.02 and ty <= sy + sh + 0.02):
+                    overlaps = True
+                    break
+            if not overlaps:
+                filtered_texts.append(tf)
 
         result = {
             "label_id": lab['id'],
@@ -565,10 +575,10 @@ async def api_generate(label_id: str, dpi: int = 600):
             "label_size": f"{lab['h_mm']} X {lab['w_mm']} mm",
             "w_mm": int(lab['w_mm']),
             "h_mm": int(lab['h_mm']),
-            "symbols": sanitize(lab['symbols']),
-            "text_fields": sanitize(lab['text_spans']),
+            "symbols": sanitize(syms),
+            "text_fields": sanitize(filtered_texts),
             "symbol_images": sym_images,
-            "symbols_placed": len(lab['symbols']),
+            "symbols_placed": len(syms),
             "convention": "template-matched",
             "debug": sanitize(lab['debug'])
         }
