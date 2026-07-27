@@ -364,12 +364,147 @@ def extract_text_region(page, label_bounds_pt, matched_symbols):
     return {'x': float(x0), 'y': float(y0), 'w': float(x1 - x0), 'h': float(y1 - y0)}
 
 
+def build_text_mask(page, label_bounds_px, render_dpi):
+    """Build binary mask of text regions inside the label crop."""
+    bx, by, bw, bh = label_bounds_px
+    inv_scale = 72 / render_dpi
+    lx_pt, ly_pt = bx * inv_scale, by * inv_scale
+    lw_pt, lh_pt = bw * inv_scale, bh * inv_scale
+    scale = render_dpi / 72
+    mask = np.zeros((bh, bw), dtype=np.uint8)
+    text_dict = page.get_text("dict")
+    for block in text_dict.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                sx0, sy0, sx1, sy1 = span.get("bbox", [0, 0, 0, 0])
+                if sx1 < lx_pt or sx0 > lx_pt + lw_pt:
+                    continue
+                if sy1 < ly_pt or sy0 > ly_pt + lh_pt:
+                    continue
+                px0 = max(0, int((sx0 - lx_pt) * scale))
+                py0 = max(0, int((sy0 - ly_pt) * scale))
+                px1 = min(bw, int((sx1 - lx_pt) * scale))
+                py1 = min(bh, int((sy1 - ly_pt) * scale))
+                if px1 > px0 and py1 > py0:
+                    mask[py0:py1, px0:px1] = 255
+    return mask
+
+
+def find_graphic_components(label_crop, text_mask, min_area_pct=0.002):
+    """Find connected graphic blobs after removing text from label."""
+    h, w = label_crop.shape[:2]
+    min_area = int(h * w * min_area_pct)
+    _, binary = cv2.threshold(label_crop, 180, 255, cv2.THRESH_BINARY_INV)
+    binary[text_mask > 0] = 0
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+    components = []
+    for i in range(1, num_labels):
+        cx = int(stats[i, cv2.CC_STAT_LEFT])
+        cy = int(stats[i, cv2.CC_STAT_TOP])
+        cw = int(stats[i, cv2.CC_STAT_WIDTH])
+        ch = int(stats[i, cv2.CC_STAT_HEIGHT])
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area < min_area:
+            continue
+        if cw > w * 0.95 and ch > h * 0.95:
+            continue
+        comp_mask = (labels[cy:cy+ch, cx:cx+cw] == i).astype(np.uint8) * 255
+        components.append({'x': cx, 'y': cy, 'w': cw, 'h': ch,
+                           'area': area, 'mask': comp_mask})
+    components.sort(key=lambda c: c['area'], reverse=True)
+    return components
+
+
+def match_asset_to_component(symbol_asset, component):
+    """Score how well an asset matches a component (IoU + aspect)."""
+    comp_mask = component['mask']
+    ch, cw = comp_mask.shape
+    sym_rgba = symbol_asset['image']
+    sym_match_mask = make_match_mask(sym_rgba)
+    if np.sum(sym_match_mask > 0) == 0:
+        return 0.0
+    mask_resized = cv2.resize(sym_match_mask, (cw, ch), interpolation=cv2.INTER_AREA)
+    _, sym_bin = cv2.threshold(mask_resized, 50, 255, cv2.THRESH_BINARY)
+    sym_fg = sym_bin > 0
+    comp_fg = comp_mask > 0
+    intersection = int(np.sum(sym_fg & comp_fg))
+    union = int(np.sum(sym_fg | comp_fg))
+    if union == 0:
+        return 0.0
+    iou = intersection / union
+    sym_h, sym_w = sym_rgba.shape[:2]
+    sym_asp = sym_w / max(sym_h, 1)
+    comp_asp = cw / max(ch, 1)
+    asp_sim = min(sym_asp, comp_asp) / max(sym_asp, comp_asp)
+    return iou * (0.5 + 0.5 * asp_sim)
+
+
+def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets):
+    """Component-based matching: mask text, find blobs, match assets."""
+    bx, by, bw, bh = label_bounds_px
+    text_mask = build_text_mask(page, label_bounds_px, RENDER_DPI)
+    components = find_graphic_components(label_crop, text_mask)
+    log.info(f"  {len(components)} graphic components found")
+    for i, c in enumerate(components[:10]):
+        log.info(f"    comp[{i}]: ({c['x']},{c['y']}) {c['w']}x{c['h']} area={c['area']}")
+
+    matched = []
+    unmatched = []
+    used = set()
+    for asset in symbol_assets:
+        best_score = 0.0
+        best_idx = -1
+        for i, comp in enumerate(components):
+            if i in used:
+                continue
+            score = match_asset_to_component(asset, comp)
+            if score > best_score:
+                best_score = score
+                best_idx = i
+        if best_score >= MATCH_THRESHOLD and best_idx >= 0:
+            comp = components[best_idx]
+            used.add(best_idx)
+            matched.append({
+                'asset': asset['file'], 'code': asset['code'],
+                'x': float(comp['x']) / bw,
+                'y': float(comp['y']) / bh,
+                'w': float(comp['w']) / bw,
+                'h': float(comp['h']) / bh,
+                'confidence': round(best_score, 4)
+            })
+            log.info(f"  MATCH {asset['file']} -> comp[{best_idx}] "
+                     f"score={best_score:.4f}")
+        else:
+            unmatched.append({
+                'asset': asset['file'],
+                'reason': 'not present in this label' if best_score < 0.05
+                          else f'below threshold ({best_score:.3f})',
+                'confidence': round(best_score, 4)
+            })
+            log.info(f"  SKIP {asset['file']}: best={best_score:.4f}")
+
+    # Text region: normalized union of text mask extent
+    text_coords = np.where(text_mask > 0)
+    text_region = None
+    if len(text_coords[0]) > 0:
+        ty0 = int(text_coords[0].min())
+        ty1 = int(text_coords[0].max())
+        tx0 = int(text_coords[1].min())
+        tx1 = int(text_coords[1].max())
+        text_region = {
+            'x': float(tx0) / bw, 'y': float(ty0) / bh,
+            'w': float(tx1 - tx0) / bw, 'h': float(ty1 - ty0) / bh
+        }
+
+    return matched, unmatched, len(components), text_region
+
+
 def template_match_symbol(rendered_gray, symbol_asset, label_bounds_px):
-    """
-    Multi-scale template matching of a symbol against the rendered PDF.
-    Returns best match: {x, y, w, h, confidence} in normalized label coords,
-    or None if below threshold.
-    """
+    """LEGACY fallback: multi-scale template matching. Not used in new pipeline."""
     lx, ly, lw, lh = label_bounds_px
     # Crop rendered image to label area
     label_region = rendered_gray[ly:ly+lh, lx:lx+lw]
@@ -637,9 +772,11 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
             'page_size_px': f"{img_w}x{img_h}",
             'label_bounds_px': [bx, by, bw, bh],
             'label_crop_px': f"{bw}x{bh}",
+            'pipeline': 'component-match',
             'assets_tested': len(symbol_assets),
-            'assets_matched': len(matched_symbols),
-            'failed_symbols': failed_symbols,
+            'assets_matched': n_matched,
+            'graphic_components_found': n_components,
+            'unmatched_assets': failed_symbols,
             'has_text_region': text_region is not None
         }
     }
