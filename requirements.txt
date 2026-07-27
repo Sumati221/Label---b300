@@ -4,4 +4,3 @@ numpy
 Pillow
 PyMuPDF
 opencv-python-headless
-cairosvg
