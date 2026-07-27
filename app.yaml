@@ -2,7 +2,7 @@ command:
   - python
   - -m
   - uvicorn
-  - app_new:app
+  - app_v2:app
   - --host
   - 0.0.0.0
   - --port
