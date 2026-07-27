@@ -151,11 +151,20 @@ def make_match_mask(img_rgba: np.ndarray) -> np.ndarray:
     return mask
 
 
+def encode_image_b64(img_rgba: np.ndarray) -> str:
+    """Encode an RGBA numpy array to base64 PNG string."""
+    img = Image.fromarray(img_rgba)
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    return base64.b64encode(buf.getvalue()).decode()
+
+
 def scan_symbol_assets():
-    """Find all PNG/SVG symbol files (not PDFs, not Excel, not .gitkeep)."""
+    """Find all PNG/SVG symbol files. Pre-encode to base64 for fast responses."""
     assets = []
     sdir = str(_SYMBOLS)
     if not os.path.isdir(sdir):
+        log.warning(f"Symbols dir not found: {sdir}")
         return assets
     for f in sorted(os.listdir(sdir)):
         low = f.lower()
@@ -166,28 +175,32 @@ def scan_symbol_assets():
         if img is None:
             continue
         code_m = re.match(r'(\d+)', f)
+        # Pre-encode to base64 so we never need to serialize numpy later
+        b64 = encode_image_b64(img)
         assets.append({
             'code': code_m.group(1) if code_m else os.path.splitext(f)[0],
             'file': f,
             'path': path,
-            'image': img,
-            'h': img.shape[0],
-            'w': img.shape[1],
+            'image': img,          # numpy array for template matching
+            'image_b64': b64,      # pre-encoded for API responses
+            'h': int(img.shape[0]),
+            'w': int(img.shape[1]),
             'is_svg': low.endswith('.svg')
         })
+        log.info(f"  Loaded: {f} ({img.shape[1]}x{img.shape[0]}, b64={len(b64)} chars)")
     # Prefer SVG over PNG for same code
     seen_codes = {}
     deduped = []
     for a in assets:
         if a['code'] in seen_codes:
             if a['is_svg'] and not seen_codes[a['code']]['is_svg']:
-                # Replace PNG with SVG
                 deduped = [x for x in deduped if x['code'] != a['code']]
                 deduped.append(a)
                 seen_codes[a['code']] = a
         else:
             deduped.append(a)
             seen_codes[a['code']] = a
+    log.info(f"Total symbol assets loaded: {len(deduped)}")
     return deduped
 
 
@@ -671,4 +684,72 @@ async def startup():
     if os.path.isdir(str(_SYMBOLS)):
         log.info(f"Contents: {os.listdir(str(_SYMBOLS))}")
     # Pre-warm cache
-    load_catalog()
+    try:
+        load_catalog()
+    except Exception as e:
+        log.error(f"Startup cache error: {e}", exc_info=True)
+
+
+@app.get("/api/test")
+async def api_test():
+    """Simple test: returns OK if app is running."""
+    return JSONResponse(content={"ok": True, "msg": "App is alive"})
+
+
+@app.get("/api/test_generate/{label_id}")
+async def api_test_generate(label_id: str):
+    """Debug generate: returns step-by-step trace to find crash point."""
+    steps = []
+    try:
+        steps.append("1. Loading catalog...")
+        c = load_catalog()
+        steps.append(f"2. Labels: {[l['id'] for l in c['labels']]}")
+        steps.append(f"3. Assets: {[a['file'] for a in c['assets']]}")
+
+        lab = next((l for l in c['labels'] if l['id'] == label_id), None)
+        if not lab:
+            steps.append(f"4. FAIL: '{label_id}' not in labels")
+            return JSONResponse(content={"steps": steps})
+
+        steps.append(f"4. Found label: {lab['id']}")
+        steps.append(f"5. Symbols: {len(lab['symbols'])}")
+        steps.append(f"6. Text spans: {len(lab['text_spans'])}")
+
+        # Check symbol types
+        for i, sym in enumerate(lab['symbols']):
+            steps.append(f"7.{i} sym keys={list(sym.keys())} types={{k: type(v).__name__ for k,v in sym.items()}}")
+
+        # Try building sym_images
+        steps.append("8. Building sym_images...")
+        sym_images = {}
+        for sym in lab['symbols']:
+            asset = next((a for a in c['assets'] if a['file'] == sym['asset']), None)
+            if asset and asset.get('image_b64'):
+                sym_images[sym['asset']] = asset['image_b64'][:50] + "..."
+                steps.append(f"   OK: {sym['asset']} ({len(asset['image_b64'])} chars)")
+            else:
+                steps.append(f"   MISS: {sym['asset']} (asset={asset is not None})")
+
+        # Try sanitize
+        steps.append("9. Sanitizing symbols...")
+        clean_syms = sanitize(lab['symbols'])
+        steps.append(f"10. Sanitized type: {type(clean_syms).__name__}")
+        if clean_syms:
+            steps.append(f"11. First sym: {clean_syms[0]}")
+
+        steps.append("12. Building result dict...")
+        result = {
+            "label_id": str(lab['id']),
+            "w_mm": int(lab['w_mm']),
+            "h_mm": int(lab['h_mm']),
+            "symbols": clean_syms,
+            "symbol_images": sym_images,
+            "symbols_placed": len(lab['symbols'])
+        }
+        steps.append("13. Returning JSONResponse...")
+        return JSONResponse(content={"steps": steps, "result_keys": list(result.keys())})
+    except Exception as e:
+        steps.append(f"CRASH: {type(e).__name__}: {e}")
+        import traceback
+        steps.append(traceback.format_exc())
+        return JSONResponse(content={"steps": steps}, status_code=500)
