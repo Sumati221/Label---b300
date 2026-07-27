@@ -220,54 +220,96 @@ def scan_symbol_assets():
 # PDF ANALYSIS
 # ════════════════════════════════════════════════════════════
 
-def detect_label_boundary(page, rendered_gray):
+def detect_label_boundary(page, rendered_gray, w_mm=85, h_mm=50):
     """
-    Detect the actual label boundary within the engineering drawing.
-    Uses edge detection + contour finding on the rendered image.
-    Returns (x, y, w, h) in pixel coords of the rendered image.
+    Detect the inner label rectangle using PyMuPDF vector paths.
+    Uses page.get_drawings() to find the rounded/rectangular path whose
+    aspect ratio matches the known label dimensions (85/50 = 1.7).
+
+    Returns (x, y, w, h) in rendered-pixel coords, or None if not found.
     """
-    # Threshold to get strong edges
-    _, thresh = cv2.threshold(rendered_gray, 200, 255, cv2.THRESH_BINARY_INV)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    expected_aspect = max(w_mm, h_mm) / min(w_mm, h_mm)  # 1.7
+    scale = RENDER_DPI / 72  # PDF points -> rendered pixels
+    page_w_pt = page.rect.width
+    page_h_pt = page.rect.height
+    page_area_pt = page_w_pt * page_h_pt
 
-    if not contours:
-        h, w = rendered_gray.shape
-        return (0, 0, w, h)
+    # Expected label size in PDF points
+    exp_w_pt = w_mm / 25.4 * 72  # ~240 pt
+    exp_h_pt = h_mm / 25.4 * 72  # ~141 pt
 
-    # Find the largest rectangular contour that isn't the full page
-    img_h, img_w = rendered_gray.shape
-    img_area = img_h * img_w
-    best_rect = None
-    best_area = 0
+    candidates = []
 
-    for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-        area = w * h
-        # Must be substantial but not the full page
-        if area > img_area * 0.02 and area < img_area * 0.85:
-            if area > best_area:
-                best_area = area
-                best_rect = (x, y, w, h)
+    # Strategy 1: page.get_drawings() — vector paths
+    try:
+        drawings = page.get_drawings()
+        for d in drawings:
+            rect = d.get('rect')  # fitz.Rect bounding box of the path
+            if rect is None:
+                continue
+            rx, ry, rx1, ry1 = rect
+            rw = rx1 - rx
+            rh = ry1 - ry
+            if rw < 20 or rh < 20:
+                continue  # skip tiny marks, arrows, dimension ticks
+            area = rw * rh
+            # Reject paths that span the full page (border)
+            if area > page_area_pt * 0.7:
+                continue
+            # Reject very small paths (< 3% of page)
+            if area < page_area_pt * 0.02:
+                continue
+            aspect = max(rw, rh) / min(rw, rh)
+            candidates.append((rx, ry, rw, rh, area, aspect))
+    except Exception as e:
+        log.warning(f"get_drawings() failed: {e}")
 
-    if best_rect:
-        return best_rect
+    # Strategy 2: also try page rects from annotations or explicit rect paths
+    # (some PDFs encode the label outline as a simple rect, not a drawing)
+    # We already have candidates from drawings; if empty, check page.rect
 
-    # Fallback: use the page text extents from PyMuPDF
-    text_dict = page.get_text("dict")
-    blocks = text_dict.get("blocks", [])
-    if blocks:
-        x0s = [b["bbox"][0] for b in blocks if "bbox" in b]
-        y0s = [b["bbox"][1] for b in blocks if "bbox" in b]
-        x1s = [b["bbox"][2] for b in blocks if "bbox" in b]
-        y1s = [b["bbox"][3] for b in blocks if "bbox" in b]
-        if x0s:
-            # Scale from PDF points to rendered pixels
-            scale = RENDER_DPI / 72
-            return (int(min(x0s)*scale), int(min(y0s)*scale),
-                    int((max(x1s)-min(x0s))*scale),
-                    int((max(y1s)-min(y0s))*scale))
+    if not candidates:
+        log.warning("No vector paths found; cannot detect label boundary")
+        return None
 
-    return (0, 0, img_w, img_h)
+    # Score candidates: prefer aspect ratio close to 1.7 AND size close to expected
+    best = None
+    best_score = float('inf')
+
+    for (rx, ry, rw, rh, area, aspect) in candidates:
+        # Aspect error (try both landscape and portrait)
+        asp_err = min(abs(aspect - expected_aspect),
+                      abs(aspect - 1.0 / expected_aspect))
+        if asp_err > 0.4:  # more than 40% off -> skip
+            continue
+
+        # Dimensional error: how close to expected 240x141 pt?
+        dim_err1 = (abs(rw - exp_w_pt) / exp_w_pt +
+                    abs(rh - exp_h_pt) / exp_h_pt)
+        dim_err2 = (abs(rw - exp_h_pt) / exp_h_pt +
+                    abs(rh - exp_w_pt) / exp_w_pt)
+        dim_err = min(dim_err1, dim_err2)
+
+        # Combined score: weight aspect more heavily
+        score = asp_err * 2.0 + dim_err * 1.0
+        if score < best_score:
+            best_score = score
+            best = (rx, ry, rw, rh)
+
+    if best is None:
+        log.warning("No candidate matched label aspect ratio 1.7")
+        return None
+
+    rx, ry, rw, rh = best
+    log.info(f"  Label rect (PDF pts): ({rx:.1f}, {ry:.1f}) {rw:.1f}x{rh:.1f} "
+             f"(score={best_score:.3f})")
+
+    # Convert PDF points -> rendered pixel coords
+    px = int(rx * scale)
+    py = int(ry * scale)
+    pw = int(rw * scale)
+    ph = int(rh * scale)
+    return (px, py, pw, ph)
 
 
 def extract_text_region(page, label_bounds_pt, matched_symbols):
@@ -507,8 +549,8 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
 def load_catalog():
     global _cache, _cache_t
     now = time.time()
-    if _cache and (now - _cache_t) < 300:
-        return _cache
+    if _cache and (now - _cache_t) < 30:
+        return _cache  # short cache for rapid iteration
 
     assets = scan_symbol_assets()
     log.info(f"Symbol assets: {[a['file'] for a in assets]}")
