@@ -90,7 +90,7 @@ app = FastAPI(title="B300 Label Generator v6", docs_url="/docs")
 _APP = Path(__file__).parent
 _SYMBOLS = _APP / "data" / "symbols"
 RENDER_DPI = 300  # DPI for PDF rasterization during matching
-MATCH_THRESHOLD = 0.55  # Minimum confidence for template match
+MATCH_THRESHOLD = 0.15  # IoU-based scoring yields lower values than template correlation
 
 _cache = None
 _cache_t = 0
@@ -706,9 +706,8 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
     }
 
 
-# OLD template-match loop removed (replaced by component_match_pipeline)
-def _dead_code_placeholder():  # pragma: no cover
-    """Placeholder — old matching logic deleted."""
+def _dead_code_start():  # pragma: no cover
+    """Everything below until _dead_code_end was the OLD matching logic."""
 
     for asset in symbol_assets:
         match = template_match_symbol(label_crop, asset, crop_bounds)
@@ -1069,7 +1068,7 @@ async def api_test_generate(label_id: str):
 
         steps.append(f"4. Found label: {lab['id']}")
         steps.append(f"5. Symbols: {len(lab['symbols'])}")
-        steps.append(f"6. Text region: {lab.get('text_region')}")
+        steps.append(f"6. Text spans: {len(lab['text_spans'])}")
 
         # Check symbol types
         for i, sym in enumerate(lab['symbols']):
