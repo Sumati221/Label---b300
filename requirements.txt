@@ -1,11 +1,7 @@
 fastapi
 uvicorn
-matplotlib
-Pillow
 numpy
-pandas
-openpyxl
-pdfplumber
-pydantic
-requests
-databricks-sdk
+Pillow
+PyMuPDF
+opencv-python-headless
+cairosvg
