@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>B300 Label Generator</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--pri:#0d47a1;--acc:#2e7d32;--bdr:#dde;--txt:#222;--dim:#888;--r:10px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--txt);height:100vh;display:flex;flex-direction:column}
+header{background:var(--pri);color:#fff;padding:14px 24px;display:flex;align-items:center;gap:12px}
+header h1{font-size:18px;font-weight:600}
+.tag{background:rgba(255,255,255,.15);padding:3px 10px;border-radius:12px;font-size:10px}
+.main{flex:1;display:grid;grid-template-columns:340px 1fr;overflow:hidden}
+.panel{background:var(--card);border-right:1px solid var(--bdr);overflow-y:auto;padding:20px}
+.panel h2{font-size:13px;font-weight:700;margin:16px 0 8px;color:var(--pri)}
+.panel h2:first-child{margin-top:0}
+.select-wrap{position:relative;margin-bottom:12px}
+.select-wrap select{width:100%;padding:10px 12px;border:1px solid var(--bdr);border-radius:var(--r);font-size:13px;background:var(--card);appearance:none;cursor:pointer}
+.select-wrap::after{content:'\25BC';position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:10px;color:var(--dim);pointer-events:none}
+.info-card{background:#e3f2fd;border-radius:8px;padding:12px;font-size:12px;line-height:1.8;margin:12px 0}
+.info-card b{color:var(--pri)}
+.dpi-row{display:flex;align-items:center;gap:10px;margin:12px 0}
+.dpi-row label{font-size:12px;font-weight:600;color:var(--pri)}
+.dpi-row select{padding:6px 10px;border:1px solid var(--bdr);border-radius:6px;font-size:12px}
+.gbtn{width:100%;padding:14px;background:var(--pri);color:#fff;border:none;border-radius:var(--r);font-size:15px;font-weight:700;cursor:pointer;margin-top:16px}
+.gbtn:hover{background:#0a3070}
+.gbtn:disabled{opacity:.3;cursor:not-allowed}
+.gbtn .spin{display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:sp .5s linear infinite;margin-right:6px;vertical-align:middle}
+@keyframes sp{to{transform:rotate(360deg)}}
+.dl-section{margin-top:16px;padding-top:12px;border-top:1px solid var(--bdr)}
+.dl-section h3{font-size:12px;color:var(--pri);margin-bottom:8px}
+.dl-btns{display:flex;flex-direction:column;gap:6px}
+.dl-btn{display:block;padding:8px 12px;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:6px;font-size:11px;font-weight:600;color:#2e7d32;text-decoration:none;text-align:center;cursor:pointer}
+.dl-btn:hover{background:#c8e6c9}
+.preview{overflow:auto;padding:24px;display:flex;flex-direction:column;align-items:center;gap:24px;background:#fafbfc}
+.empty{color:var(--dim);font-size:14px;text-align:center}
+.empty .big{font-size:48px;margin-bottom:12px}
+.label-section{width:100%;max-width:1200px}
+.label-section h3{font-size:15px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.label-img{width:100%;border:2px solid #1a73e8;border-radius:var(--r);box-shadow:0 2px 12px rgba(0,0,0,.08)}
+.meta{font-size:11px;color:var(--dim);margin-top:8px;text-align:center}
+.log{margin-top:16px;background:#f9f9fb;border-radius:8px;padding:8px;font-size:9px;font-family:monospace;max-height:120px;overflow-y:auto;line-height:1.6;color:#555}
+</style>
+</head><body>
+<header>
+  <h1>B300 Label Generator</h1>
+  <span class="tag">Relation-Driven</span>
+  <span class="tag">B300 Category</span>
+</header>
+<div class="main">
+<div class="panel">
+
+<h2>1. Select Product Label</h2>
+<div class="select-wrap">
+  <select id="productSelect" onchange="onProductChange()">
+    <option value="">Loading products...</option>
+  </select>
+</div>
+
+<div class="info-card" id="productInfo">
+  <b>Product:</b> -<br>
+  <b>Label Size:</b> -<br>
+  <b>Symbols:</b> -<br>
+  <b>Description:</b> -
+</div>
+
+<h2>2. Output Settings</h2>
+<div class="dpi-row">
+  <label>DPI:</label>
+  <select id="dpiSelect">
+    <option value="300">300 (Draft)</option>
+    <option value="600" selected>600 (Standard)</option>
+    <option value="1200">1200 (High Quality)</option>
+  </select>
+</div>
+
+<button class="gbtn" id="genBtn" onclick="generateLabel()" disabled>
+  Generate Label
+</button>
+
+<div class="dl-section" id="dlSection" style="display:none">
+  <h3>Download</h3>
+  <div class="dl-btns">
+    <a class="dl-btn" id="dlPng">Download PNG</a>
+  </div>
+</div>
+
+<div class="log" id="logBox"></div>
+</div>
+
+<div class="preview" id="previewArea">
+  <div class="empty">
+    <div class="big">&#x1F3F7;</div>
+    Select a product and click Generate<br>to preview the B300 label
+  </div>
+</div>
+</div>
+
+<script>
+let catalog = [];
+let currentSheet = '';
+
+async function loadCatalog() {
+  try {
+    const res = await fetch('/api/catalog');
+    const data = await res.json();
+    catalog = data.products || [];
+    const sel = document.getElementById('productSelect');
+    sel.innerHTML = '<option value="">-- Select a B300 product --</option>';
+    catalog.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.sheet_name;
+      opt.textContent = `${p.product_code} - ${p.product_desc || p.sheet_name}`;
+      sel.appendChild(opt);
+    });
+    if (catalog.length === 0) {
+      sel.innerHTML = '<option value="">No products found (add b300_labels_relation.xlsx)</option>';
+    }
+  } catch (e) {
+    document.getElementById('productSelect').innerHTML = '<option value="">Error loading catalog</option>';
+    addLog('Error loading catalog: ' + e.message, true);
+  }
+}
+
+function onProductChange() {
+  const sel = document.getElementById('productSelect');
+  currentSheet = sel.value;
+  const btn = document.getElementById('genBtn');
+  btn.disabled = !currentSheet;
+  if (currentSheet) {
+    const p = catalog.find(x => x.sheet_name === currentSheet);
+    if (p) {
+      document.getElementById('productInfo').innerHTML =
+        `<b>Product:</b> ${p.product_code}<br>` +
+        `<b>Label Size:</b> ${p.label_size}<br>` +
+        `<b>Symbols:</b> ${p.symbol_count}<br>` +
+        `<b>Description:</b> ${p.product_desc || '-'}`;
+    }
+  }
+}
+
+async function generateLabel() {
+  if (!currentSheet) return;
+  const btn = document.getElementById('genBtn');
+  const dpi = document.getElementById('dpiSelect').value;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Generating...';
+  addLog(`Generating label for ${currentSheet} at ${dpi} DPI...`);
+
+  try {
+    const res = await fetch(`/api/generate/${encodeURIComponent(currentSheet)}?dpi=${dpi}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    const preview = document.getElementById('previewArea');
+    preview.innerHTML = `
+      <div class="label-section">
+        <h3><span class="icon">&#x1F3F7;</span>${data.product_code} - ${data.product_desc || currentSheet}</h3>
+        <img class="label-img" src="${data.image}" alt="B300 Label">
+        <div class="meta">
+          ${data.label_size} | ${data.symbols_placed} symbols placed | ${dpi} DPI | Convention: ${data.convention}
+        </div>
+      </div>`;
+
+    // Show download button
+    const dlSection = document.getElementById('dlSection');
+    dlSection.style.display = 'block';
+    document.getElementById('dlPng').href = `/api/download/${encodeURIComponent(currentSheet)}?dpi=${dpi}`;
+    document.getElementById('dlPng').setAttribute('download', '');
+
+    addLog(`Done! ${data.symbols_placed} symbols placed.`, false, true);
+  } catch (e) {
+    addLog('Error: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate Label';
+  }
+}
+
+function addLog(msg, isErr = false, isGood = false) {
+  const box = document.getElementById('logBox');
+  const cls = isErr ? 'e' : (isGood ? 'g' : '');
+  box.innerHTML += `<div class="${cls}">${new Date().toLocaleTimeString()} - ${msg}</div>`;
+  box.scrollTop = box.scrollHeight;
+}
+
+loadCatalog();
+</script>
+</body></html>

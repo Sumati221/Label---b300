@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+matplotlib
+Pillow
+numpy
+pandas
+openpyxl
+ezdxf
+pydantic
+requests
+databricks-sdk
+cairosvg
