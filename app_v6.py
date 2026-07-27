@@ -670,14 +670,47 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
     label_crop = full_rendered[by:by+bh, bx:bx+bw]
     log.info(f"  Cropped label: {label_crop.shape[1]}x{label_crop.shape[0]}px")
 
-    # 5. Template-match within cropped label (coords are 0,0-relative)
-    crop_bounds = (0, 0, bw, bh)
-    matched_symbols = []
-    failed_symbols = []
+    # 5. Component-based matching (text masked, graphic blobs isolated, IoU scored)
+    matched_symbols, failed_symbols, n_components, text_region = \
+        component_match_pipeline(page, label_crop, (bx, by, bw, bh), symbol_assets)
+    n_matched = len(matched_symbols)
+    log.info(f"  Result: {n_matched} matched, {len(failed_symbols)} skipped, "
+             f"{n_components} components")
 
-    for asset in symbol_assets:
-        match = template_match_symbol(label_crop, asset, crop_bounds)
-        if match:
+    # Title
+    title = fname.replace('.pdf', '')
+    tm_match = re.search(r'TITLE\n(.+)', full_text)
+    if tm_match:
+        title = tm_match.group(1).strip()
+
+    doc.close()
+
+    return {
+        'id': fname.replace('.pdf', ''),
+        'title': title,
+        'w_mm': w_mm, 'h_mm': h_mm,
+        'symbols': matched_symbols,
+        'text_region': text_region,
+        'debug': {
+            'render_dpi': RENDER_DPI,
+            'page_size_px': f"{img_w}x{img_h}",
+            'label_bounds_px': [bx, by, bw, bh],
+            'label_crop_px': f"{bw}x{bh}",
+            'pipeline': 'component-match',
+            'assets_tested': len(symbol_assets),
+            'assets_matched': n_matched,
+            'graphic_components_found': n_components,
+            'unmatched_assets': failed_symbols,
+            'has_text_region': text_region is not None
+        }
+    }
+
+
+def _dead_code_start():  # pragma: no cover
+    """Everything below until _dead_code_end was the OLD matching logic."""
+
+    return  # old matching code removed
+    if False:
             # Reject too-small matches (<2% of label)
             if match['w'] < MIN_SYMBOL_SIZE or match['h'] < MIN_SYMBOL_SIZE:
                 reason = f"too small ({match['w']:.4f}x{match['h']:.4f})"
@@ -772,14 +805,16 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
             'page_size_px': f"{img_w}x{img_h}",
             'label_bounds_px': [bx, by, bw, bh],
             'label_crop_px': f"{bw}x{bh}",
-            'pipeline': 'component-match',
             'assets_tested': len(symbol_assets),
-            'assets_matched': n_matched,
-            'graphic_components_found': n_components,
-            'unmatched_assets': failed_symbols,
+            'assets_matched': len(matched_symbols),
+            'failed_symbols': failed_symbols,
             'has_text_region': text_region is not None
         }
     }
+
+
+def _dead_code_end():  # pragma: no cover
+    pass
 
 
 # ════════════════════════════════════════════════════════════
