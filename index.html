@@ -111,7 +111,8 @@ async function generate(){
       if(data.debug) h+=`<pre style="font-size:8px;margin-top:8px;background:#f5f5f5;padding:6px;border-radius:4px;overflow:auto;max-height:200px">${JSON.stringify(data.debug,null,2)}</pre>`;
       h+='</div>';preview.innerHTML=h;addLog(data.error,true);return;}
     renderLabel(data,showDebug);
-    addLog(`Done! ${data.symbols_placed} symbols placed.`,false,true);
+    const notPresent=data.debug&&data.debug.failed_symbols?data.debug.failed_symbols.filter(f=>f.confidence===0).length:0;
+    addLog(`Matched ${data.symbols_placed} symbol(s); ${notPresent} asset(s) not in this label.`,false,true);
   }catch(e){addLog(e.message,true)}
   finally{btn.disabled=false;btn.textContent='Generate Label'}
 }

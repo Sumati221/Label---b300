@@ -381,6 +381,12 @@ def template_match_symbol(rendered_gray, symbol_asset, label_bounds_px):
     sym_gray = cv2.cvtColor(sym_rgba[:, :, :3], cv2.COLOR_RGB2GRAY)
     sym_mask = make_match_mask(sym_rgba)
 
+    # Diagnostic: verify mask has foreground pixels
+    mask_fg_pixels = int(np.sum(sym_mask > 0))
+    if mask_fg_pixels == 0:
+        log.warning(f"  {symbol_asset['file']}: mask has ZERO fg pixels, skipping")
+        return None
+
     # Invert: in PDF, symbols are dark on light; template should match dark content
     _, sym_bin = cv2.threshold(sym_gray, 128, 255, cv2.THRESH_BINARY_INV)
     # Also threshold the label region
@@ -567,29 +573,44 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
                      f"conf={match['confidence']:.3f}")
         else:
             failed_symbols.append({'asset': asset['file'],
-                                   'reason': 'no match above threshold',
+                                   'reason': 'not present in this label',
                                    'confidence': 0})
-            log.warning(f"  MISS {asset['file']}")
+            log.info(f"  SKIP {asset['file']}: not in this PDF")
 
-    # 6. VALIDATE: require at least 2 symbols
-    if len(matched_symbols) < 2:
-        log.error(f"  FAIL: only {len(matched_symbols)}/{len(symbol_assets)} symbols")
-        doc.close()
-        return {
-            'id': fname.replace('.pdf', ''),
-            'title': fname.replace('.pdf', ''),
-            'error': (f'Symbol matching failed: {len(matched_symbols)}/'
-                      f'{len(symbol_assets)} matched'),
-            'w_mm': w_mm, 'h_mm': h_mm,
-            'symbols': matched_symbols,
-            'failed_symbols': failed_symbols,
-            'text_region': None,
-            'debug': {
-                'label_bounds_px': [bx, by, bw, bh],
-                'label_crop_px': f"{bw}x{bh}",
-                'failed_symbols': failed_symbols
+    # 6. Each PDF uses its own subset of symbols — do NOT require all
+    n_matched = len(matched_symbols)
+    n_not_present = len([f for f in failed_symbols if f['confidence'] == 0])
+    n_rejected = len([f for f in failed_symbols if f['confidence'] > 0])
+    log.info(f"  Result: {n_matched} matched, {n_not_present} not in this PDF, "
+             f"{n_rejected} rejected (size/bounds)")
+
+    # Only fail if ZERO symbols matched AND label has visible content
+    if n_matched == 0:
+        dark_pix = int(np.sum(label_crop < 128))
+        total_pix = label_crop.shape[0] * label_crop.shape[1]
+        has_content = dark_pix > total_pix * 0.01
+        if has_content:
+            log.error(f"  FAIL: 0 matched but label has content ({dark_pix/total_pix*100:.1f}% dark)")
+            doc.close()
+            return {
+                'id': fname.replace('.pdf', ''),
+                'title': fname.replace('.pdf', ''),
+                'error': f'No symbols matched (0/{len(symbol_assets)}). Label has visible content but no asset correlated.',
+                'w_mm': w_mm, 'h_mm': h_mm,
+                'symbols': [],
+                'failed_symbols': failed_symbols,
+                'text_region': None,
+                'debug': {
+                    'label_bounds_px': [bx, by, bw, bh],
+                    'label_crop_px': f"{bw}x{bh}",
+                    'dark_pixel_pct': f"{dark_pix/total_pix*100:.1f}%",
+                    'failed_symbols': failed_symbols
+                }
             }
-        }
+        else:
+            log.warning(f"  Label crop appears blank")
+            doc.close()
+            return None
 
     # 7. Text region (union box excluding symbol areas)
     scale = 72 / RENDER_DPI
