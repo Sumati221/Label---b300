@@ -5,8 +5,7 @@ Pillow
 numpy
 pandas
 openpyxl
-ezdxf
+pdfplumber
 pydantic
 requests
 databricks-sdk
-cairosvg
