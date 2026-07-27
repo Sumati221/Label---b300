@@ -59,7 +59,8 @@ class NumpyEncoder(json.JSONEncoder):
 
 
 def sanitize(obj):
-    """Recursively convert numpy types to native Python for JSON."""
+    """Recursively convert numpy types to native Python for JSON.
+    Also handles inf/nan which are not valid JSON."""
     if isinstance(obj, dict):
         return {k: sanitize(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -67,7 +68,18 @@ def sanitize(obj):
     if isinstance(obj, (np.integer,)):
         return int(obj)
     if isinstance(obj, (np.floating,)):
-        return float(obj)
+        v = float(obj)
+        if v != v:  # nan
+            return 0.0
+        if v == float('inf') or v == float('-inf'):
+            return 1.0
+        return v
+    if isinstance(obj, float):
+        if obj != obj:  # nan
+            return 0.0
+        if obj == float('inf') or obj == float('-inf'):
+            return 1.0
+        return obj
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     return obj
@@ -350,13 +362,16 @@ def template_match_symbol(rendered_gray, symbol_asset, label_bounds_px):
                                        cv2.TM_CCORR_NORMED, mask=resized_mask)
             _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
-            if max_val > best_val:
+            # Reject inf/nan (mask normalization error)
+            if max_val != max_val or max_val == float('inf'):
+                continue
+            if max_val > best_val and max_val <= 1.0:
                 best_val = max_val
                 best_match = {
-                    'x': max_loc[0] / label_w_px,
-                    'y': max_loc[1] / label_h_px,
-                    'w': tw / label_w_px,
-                    'h': th / label_h_px,
+                    'x': float(max_loc[0]) / label_w_px,
+                    'y': float(max_loc[1]) / label_h_px,
+                    'w': float(tw) / label_w_px,
+                    'h': float(th) / label_h_px,
                     'confidence': float(max_val)
                 }
         except cv2.error:
