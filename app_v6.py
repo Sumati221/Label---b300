@@ -64,16 +64,30 @@ def load_symbol_as_image(path: str) -> Optional[np.ndarray]:
     ext = os.path.splitext(path)[1].lower()
     try:
         if ext == '.svg':
-            if not HAS_CAIRO:
-                return None
-            png_bytes = cairosvg.svg2png(url=path, dpi=300)
-            img = Image.open(io.BytesIO(png_bytes)).convert('RGBA')
+            if HAS_CAIRO:
+                png_bytes = cairosvg.svg2png(url=path, dpi=300)
+                img = Image.open(io.BytesIO(png_bytes)).convert('RGBA')
+            else:
+                # Fallback: try rendering SVG with PyMuPDF
+                if HAS_FITZ:
+                    doc = fitz.open(path)
+                    page = doc[0]
+                    pix = page.get_pixmap(dpi=300)
+                    img_bytes = pix.tobytes("png")
+                    img = Image.open(io.BytesIO(img_bytes)).convert('RGBA')
+                    doc.close()
+                else:
+                    log.warning(f"No SVG renderer for {path}")
+                    return None
         else:
             img = Image.open(path).convert('RGBA')
 
         arr = np.array(img)
         # Trim transparent/white padding
         arr = trim_padding(arr)
+        if arr.shape[0] < 3 or arr.shape[1] < 3:
+            log.warning(f"Symbol too small after trim: {path}")
+            return None
         return arr
     except Exception as e:
         log.warning(f"Cannot load symbol {path}: {e}")
