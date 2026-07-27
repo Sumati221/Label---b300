@@ -602,28 +602,34 @@ async def api_download(label_id: str, dpi: int = 600):
 
 @app.get("/api/health")
 async def api_health():
-    c = load_catalog()
-    return {
-        "status": "ok",
-        "dependencies": {
-            "PyMuPDF": HAS_FITZ, "OpenCV": HAS_CV2, "CairoSVG": HAS_CAIRO
-        },
-        "symbols_dir": str(_SYMBOLS),
-        "dir_exists": os.path.isdir(str(_SYMBOLS)),
-        "all_files": os.listdir(str(_SYMBOLS)) if os.path.isdir(str(_SYMBOLS)) else [],
-        "assets_loaded": [{'file': a['file'], 'size': f"{a['w']}x{a['h']}"}
-                          for a in c['assets']],
-        "labels": [{
-            'id': l['id'],
-            'symbols_matched': len(l['symbols']),
-            'matched': [{'asset': s['asset'], 'confidence': round(s['confidence'], 3),
-                         'pos': f"({s['x']:.2f},{s['y']:.2f})",
-                         'size': f"{s['w']:.2f}x{s['h']:.2f}"}
-                        for s in l['symbols']],
-            'text_spans': len(l['text_spans']),
-            'debug': l['debug']
-        } for l in c['labels']]
-    }
+    try:
+        c = load_catalog()
+        data = {
+            "status": "ok",
+            "dependencies": {
+                "PyMuPDF": HAS_FITZ, "OpenCV": HAS_CV2, "CairoSVG": HAS_CAIRO
+            },
+            "symbols_dir": str(_SYMBOLS),
+            "dir_exists": os.path.isdir(str(_SYMBOLS)),
+            "all_files": os.listdir(str(_SYMBOLS)) if os.path.isdir(str(_SYMBOLS)) else [],
+            "assets_loaded": [{'file': a['file'], 'size': f"{a['w']}x{a['h']}"}
+                              for a in c['assets']],
+            "labels": [{
+                'id': l['id'],
+                'symbols_matched': len(l['symbols']),
+                'matched': [{'asset': s['asset'],
+                             'confidence': float(s['confidence']),
+                             'pos': f"({float(s['x']):.2f},{float(s['y']):.2f})",
+                             'size': f"{float(s['w']):.2f}x{float(s['h']):.2f}"}
+                            for s in l['symbols']],
+                'text_spans': len(l['text_spans']),
+                'debug': l['debug']
+            } for l in c['labels']]
+        }
+        return JSONResponse(content=json.loads(json.dumps(data, cls=NumpyEncoder)))
+    except Exception as e:
+        log.error(f"Health check error: {e}", exc_info=True)
+        return JSONResponse(content={"status": "error", "message": str(e)}, status_code=500)
 
 
 @app.on_event("startup")
