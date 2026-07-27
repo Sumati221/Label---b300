@@ -419,10 +419,11 @@ async def generate(label_id: str, dpi: int = 600):
         img_b64 = base64.b64encode(img_bytes).decode()
         return {
             "image": f"data:image/png;base64,{img_b64}",
-            "label_id": label['id'],
-            "title": label['title'],
-            "label_size": f"{label['width_mm']}mm x {label['height_mm']}mm",
+            "product_code": label['id'].split('-M-')[0] if '-M-' in label['id'] else label['id'],
+            "product_desc": label['title'],
+            "label_size": f"{label['width_mm']} X {label['height_mm']} mm",
             "symbols_placed": placed_count,
+            "convention": "auto-layout",
             "dimensions": {"width_mm": label['width_mm'], "height_mm": label['height_mm']}
         }
     except Exception as e:
