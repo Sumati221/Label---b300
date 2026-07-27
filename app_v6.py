@@ -40,9 +40,38 @@ except (ImportError, OSError):
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, Response, JSONResponse
+import json
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("label-v6")
+
+
+class NumpyEncoder(json.JSONEncoder):
+    """Handle numpy int32/float32 from OpenCV in JSON responses."""
+    def default(self, obj):
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
+def sanitize(obj):
+    """Recursively convert numpy types to native Python for JSON."""
+    if isinstance(obj, dict):
+        return {k: sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize(v) for v in obj]
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
+
 
 app = FastAPI(title="B300 Label Generator v6", docs_url="/docs")
 
@@ -419,7 +448,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
         'debug': {
             'render_dpi': RENDER_DPI,
             'page_size_px': f"{img_w}x{img_h}",
-            'label_bounds_px': label_bounds_px,
+            'label_bounds_px': [int(x) for x in label_bounds_px],
             'assets_tested': len(symbol_assets),
             'assets_matched': len(matched_symbols),
             'text_spans': len(text_spans)
