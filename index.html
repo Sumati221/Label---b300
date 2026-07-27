@@ -1,163 +1,131 @@
 <!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>B300 Label Generator v6</title>
+<title>B300 Label Generator</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:system-ui,sans-serif;background:#f0f2f5;height:100vh;display:flex;flex-direction:column}
-header{background:#0d47a1;color:#fff;padding:12px 24px;display:flex;align-items:center;gap:12px}
-header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;border-radius:10px;font-size:10px}
-.main{flex:1;display:grid;grid-template-columns:320px 1fr;overflow:hidden}
+body{font-family:system-ui,sans-serif;background:#f5f5f5;height:100vh;display:flex;flex-direction:column}
+header{background:#000;color:#fff;padding:12px 24px;display:flex;align-items:center;gap:12px}
+header h1{font-size:16px;font-weight:400}
+.main{flex:1;display:grid;grid-template-columns:300px 1fr;overflow:hidden}
 .panel{background:#fff;border-right:1px solid #ddd;padding:16px;overflow-y:auto}
-.panel h2{font-size:12px;font-weight:700;margin:14px 0 6px;color:#0d47a1}
-.panel select{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px}
-.info{background:#e3f2fd;border-radius:6px;padding:10px;font-size:11px;margin:10px 0;line-height:1.7}
-.info b{color:#0d47a1}
-.btn{width:100%;padding:12px;background:#0d47a1;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;margin-top:12px}
+.panel h2{font-size:11px;font-weight:700;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px}
+.panel select{width:100%;padding:8px;border:1px solid #ccc;border-radius:4px;font-size:13px}
+.info{background:#f9f9f9;border:1px solid #eee;border-radius:4px;padding:10px;font-size:11px;margin:10px 0;line-height:1.7}
+.btn{width:100%;padding:12px;background:#000;color:#fff;border:none;border-radius:4px;font-size:13px;font-weight:700;cursor:pointer;margin-top:12px}
 .btn:disabled{opacity:.3}
-.btn:hover:not(:disabled){background:#093080}
-.preview{flex:1;overflow:auto;padding:20px;display:flex;flex-direction:column;align-items:center;background:#fafbfc}
-.label-container{position:relative;border:2px solid #1a73e8;border-radius:4px;box-shadow:0 2px 12px rgba(0,0,0,.1);background:#fff}
-.label-container img.symbol{position:absolute;pointer-events:none}
-.label-container .text-field{position:absolute;border:1px dashed #aaa;background:rgba(255,255,200,.3);font-size:inherit;padding:1px 2px;outline:none;overflow:hidden;resize:none}
-.label-container .text-field:focus{border-color:#1a73e8;background:rgba(200,230,255,.3)}
-.debug-box{position:absolute;pointer-events:none}
-.debug-box.symbol-box{border:1px solid red}
-.debug-box.text-box{border:1px solid green}
-.debug-label{position:absolute;font-size:7px;color:red;white-space:nowrap}
-.meta{font-size:11px;color:#666;margin-top:8px;text-align:center}
-.log{margin-top:12px;background:#f5f5f7;border-radius:6px;padding:6px;font-size:9px;font-family:monospace;max-height:140px;overflow-y:auto;line-height:1.6;color:#555}
+.btn:hover:not(:disabled){background:#333}
 .toggle{display:flex;align-items:center;gap:6px;margin:8px 0;font-size:11px}
 .toggle input{cursor:pointer}
+.preview{flex:1;overflow:auto;padding:24px;display:flex;flex-direction:column;align-items:center;background:#e8e8e8}
+.label-container{position:relative;border:1px solid #000;background:#fff}
+.label-container img.symbol{position:absolute;pointer-events:none;filter:grayscale(100%)}
+.label-container .text-area{position:absolute;border:1px solid #999;background:#fff;font-family:Arial,sans-serif;font-size:9px;padding:4px;outline:none;overflow:hidden;resize:none;color:#000}
+.label-container .text-area:focus{border-color:#000;background:#f8f8f8}
+.debug-box{position:absolute;pointer-events:none}
+.debug-box.sym{border:1px solid red}
+.debug-box.txt{border:1px solid green}
+.debug-lbl{position:absolute;font-size:7px;color:red;white-space:nowrap;pointer-events:none}
+.meta{font-size:10px;color:#666;margin-top:8px;text-align:center}
+.log{margin-top:12px;background:#f5f5f5;border-radius:4px;padding:6px;font-size:9px;font-family:monospace;max-height:120px;overflow-y:auto;line-height:1.5;color:#555}
 </style>
 </head><body>
-<header>
-  <h1>B300 Label Generator</h1>
-  <span class="tag">v6 • Template Matching</span>
-</header>
+<header><h1>B300 Label Generator</h1></header>
 <div class="main">
 <div class="panel">
-<h2>1. Select Label PDF</h2>
+<h2>Select Label PDF</h2>
 <select id="sel" onchange="onSelect()"><option value="">Loading...</option></select>
-
-<div class="info" id="info"><b>Status:</b> Select a label</div>
-
-<h2>2. Settings</h2>
-<div class="toggle">
-  <input type="checkbox" id="dbg" checked><label for="dbg">Show debug overlay</label>
-</div>
+<div class="info" id="info">Select a label to begin</div>
+<h2>Settings</h2>
 <select id="dpi"><option value="300">300 DPI</option><option value="600" selected>600 DPI</option></select>
-
+<div class="toggle"><input type="checkbox" id="dbg"><label for="dbg">Debug overlay</label></div>
 <button class="btn" id="genBtn" onclick="generate()" disabled>Generate Label</button>
-
 <div class="log" id="logBox"></div>
 </div>
-
 <div class="preview" id="preview">
   <p style="color:#888;margin-top:40px">Select a label and click Generate</p>
 </div>
 </div>
-
 <script>
-let catalog=[], currentId='';
-
+let catalog=[],currentId='';
 async function loadCatalog(){
   try{
     const r=await fetch('/api/catalog');
     const d=await r.json();
     catalog=d.products||[];
     const s=document.getElementById('sel');
-    s.innerHTML='<option value="">-- Select PDF label --</option>';
+    s.innerHTML='<option value="">-- Select PDF --</option>';
     catalog.forEach(p=>{
       const o=document.createElement('option');
       o.value=p.sheet_name;
-      o.textContent=`${p.product_code} - ${p.product_desc} (${p.symbol_count} symbols)`;
+      o.textContent=`${p.product_code} (${p.symbol_count} symbols)`;
       s.appendChild(o);
     });
-    if(!catalog.length) s.innerHTML='<option>No labels found</option>';
-  }catch(e){addLog('Catalog error: '+e.message,true)}
+    if(!catalog.length) s.innerHTML='<option>No label PDFs found</option>';
+  }catch(e){addLog('Catalog: '+e.message,true)}
 }
-
 function onSelect(){
   currentId=document.getElementById('sel').value;
   document.getElementById('genBtn').disabled=!currentId;
   if(currentId){
     const p=catalog.find(x=>x.sheet_name===currentId);
     if(p) document.getElementById('info').innerHTML=
-      `<b>Product:</b> ${p.product_code}<br><b>Size:</b> ${p.label_size}<br><b>Symbols detected:</b> ${p.symbol_count}`;
+      `<b>Code:</b> ${p.product_code}<br><b>Size:</b> ${p.label_size}<br><b>Symbols:</b> ${p.symbol_count}`;
   }
 }
-
 async function generate(){
   if(!currentId)return;
   const btn=document.getElementById('genBtn');
-  btn.disabled=true; btn.textContent='Detecting...';
-  addLog('Running template matching...');
+  btn.disabled=true;btn.textContent='Generating...';
+  addLog('Processing PDF...');
   const dpi=document.getElementById('dpi').value;
   const showDebug=document.getElementById('dbg').checked;
-
   try{
     const r=await fetch(`/api/generate/${encodeURIComponent(currentId)}?dpi=${dpi}`);
-    if(!r.ok)throw new Error(`HTTP ${r.status}`);
+    if(!r.ok){const b=await r.text();throw new Error(`HTTP ${r.status}: ${b.substring(0,200)}`)}
     const data=await r.json();
-    renderLabel(data, showDebug, parseInt(dpi));
-    addLog(`Done! ${data.symbols_placed} symbols matched.`,false,true);
-  }catch(e){addLog('Error: '+e.message,true)}
+    renderLabel(data,showDebug);
+    addLog(`Done! ${data.symbols_placed} symbols placed.`,false,true);
+  }catch(e){addLog(e.message,true)}
   finally{btn.disabled=false;btn.textContent='Generate Label'}
 }
-
-function renderLabel(data, showDebug, dpi){
+function renderLabel(data,showDebug){
   const preview=document.getElementById('preview');
-  // Label container sized in px (mm -> px at screen 96dpi equivalent)
-  const SCALE=3; // display scale factor
+  const SCALE=3.5;
   const wPx=data.w_mm*SCALE;
   const hPx=data.h_mm*SCALE;
-
   let html=`<div class="label-container" style="width:${wPx}px;height:${hPx}px;">`;
-
-  // Place symbols
+  // Symbols
   (data.symbols||[]).forEach(sym=>{
-    const imgData=data.symbol_images[sym.asset];
+    const imgData=(data.symbol_images||{})[sym.asset];
     if(!imgData)return;
-    const x=(sym.x*100).toFixed(2), y=(sym.y*100).toFixed(2);
-    const w=(sym.w*100).toFixed(2), h=(sym.h*100).toFixed(2);
-    html+=`<img class="symbol" src="data:image/png;base64,${imgData}" `;
-    html+=`style="left:${x}%;top:${y}%;width:${w}%;height:${h}%">`;
+    const x=(sym.x*100).toFixed(2),y=(sym.y*100).toFixed(2);
+    const w=(sym.w*100).toFixed(2),h=(sym.h*100).toFixed(2);
+    html+=`<img class="symbol" src="data:image/png;base64,${imgData}" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%">`;
     if(showDebug){
-      html+=`<div class="debug-box symbol-box" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%"></div>`;
-      html+=`<span class="debug-label" style="left:${x}%;top:calc(${y}% - 10px)">${sym.asset} (${sym.confidence.toFixed(2)})</span>`;
+      html+=`<div class="debug-box sym" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%"></div>`;
+      html+=`<span class="debug-lbl" style="left:${x}%;top:calc(${y}% - 9px)">${sym.asset} (${(sym.confidence||0).toFixed(2)})</span>`;
     }
   });
-
-  // Editable text fields
-  (data.text_fields||[]).forEach(tf=>{
-    const x=(tf.x*100).toFixed(2), y=(tf.y*100).toFixed(2);
-    const w=(tf.w*100).toFixed(2), h=(tf.h*100).toFixed(2);
-    const fs=Math.max(6, tf.font_size*0.8);
-    html+=`<input class="text-field" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%;font-size:${fs}px" placeholder="">`;
-    if(showDebug){
-      html+=`<div class="debug-box text-box" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%"></div>`;
-    }
-  });
-
-  html+=`</div>`;
-  html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols matched | Template-matched from PDF</div>`;
-
-  // Debug info
-  if(showDebug && data.debug){
-    html+=`<pre style="font-size:9px;margin-top:8px;background:#f5f5f5;padding:8px;border-radius:4px;max-width:600px;overflow:auto">${JSON.stringify(data.debug,null,2)}</pre>`;
+  // Single text region
+  const tr=data.text_region;
+  if(tr){
+    const tx=(tr.x*100).toFixed(2),ty=(tr.y*100).toFixed(2);
+    const tw=(tr.w*100).toFixed(2),th=(tr.h*100).toFixed(2);
+    html+=`<textarea class="text-area" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%" placeholder="Product information"></textarea>`;
+    if(showDebug) html+=`<div class="debug-box txt" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%"></div>`;
   }
-
+  html+=`</div>`;
+  html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
+  if(showDebug&&data.debug) html+=`<pre style="font-size:8px;margin-top:6px;background:#f5f5f5;padding:6px;border-radius:4px;max-width:500px;overflow:auto">${JSON.stringify(data.debug,null,2)}</pre>`;
   preview.innerHTML=html;
 }
-
 function addLog(msg,err=false,ok=false){
   const b=document.getElementById('logBox');
   const c=err?'color:red':ok?'color:green':'';
-  b.innerHTML+=`<div style="${c}">${new Date().toLocaleTimeString()} - ${msg}</div>`;
+  b.innerHTML+=`<div style="${c}">${new Date().toLocaleTimeString().slice(0,8)} ${msg}</div>`;
   b.scrollTop=b.scrollHeight;
 }
-
 loadCatalog();
 </script>
 </body></html>
