@@ -270,40 +270,56 @@ def detect_label_boundary(page, rendered_gray):
     return (0, 0, img_w, img_h)
 
 
-def extract_text_spans(page, label_bounds_pt):
+def extract_text_region(page, label_bounds_pt, matched_symbols):
     """
-    Extract text spans from the PDF page within the label boundary.
-    Returns list of {text, x, y, w, h, font_size} all in normalized coords (0-1).
-    label_bounds_pt: (x0, y0, w, h) in PDF points.
+    Extract text spans inside the label, exclude those overlapping symbols,
+    and return ONE union bounding box as {x, y, w, h} in normalized 0-1 coords.
+    Returns None if no text found.
     """
     lx, ly, lw, lh = label_bounds_pt
-    spans = []
+    if lw < 1 or lh < 1:
+        return None
+
     text_dict = page.get_text("dict")
+    span_boxes = []
+
     for block in text_dict.get("blocks", []):
-        if block.get("type") != 0:  # text block
+        if block.get("type") != 0:
             continue
         for line in block.get("lines", []):
             for span in line.get("spans", []):
                 bbox = span.get("bbox", [0, 0, 0, 0])
                 sx0, sy0, sx1, sy1 = bbox
-                # Check if inside label boundary
-                if (sx0 >= lx - 1 and sx1 <= lx + lw + 1 and
-                    sy0 >= ly - 1 and sy1 <= ly + lh + 1):
-                    # Normalize to label coords
-                    nx = (sx0 - lx) / lw
-                    ny = (sy0 - ly) / lh
-                    nw = (sx1 - sx0) / lw
-                    nh = (sy1 - sy0) / lh
-                    spans.append({
-                        'text': span.get('text', ''),
-                        'x': max(0, nx),
-                        'y': max(0, ny),
-                        'w': min(1, nw),
-                        'h': min(1, nh),
-                        'font_size': span.get('size', 8),
-                        'font': span.get('font', '')
-                    })
-    return spans
+                if not (sx0 >= lx - 1 and sx1 <= lx + lw + 1 and
+                        sy0 >= ly - 1 and sy1 <= ly + lh + 1):
+                    continue
+                nx = max(0.0, (sx0 - lx) / lw)
+                ny = max(0.0, (sy0 - ly) / lh)
+                nw = min(1.0, (sx1 - sx0) / lw)
+                nh = min(1.0, (sy1 - sy0) / lh)
+                # Exclude spans overlapping matched symbols
+                overlaps = False
+                for s in matched_symbols:
+                    ssx = float(s.get('x', 0))
+                    ssy = float(s.get('y', 0))
+                    ssw = float(s.get('w', 0))
+                    ssh = float(s.get('h', 0))
+                    if (nx < ssx + ssw + 0.03 and nx + nw > ssx - 0.03 and
+                        ny < ssy + ssh + 0.03 and ny + nh > ssy - 0.03):
+                        overlaps = True
+                        break
+                if not overlaps and nw > 0.001 and nh > 0.001:
+                    span_boxes.append((nx, ny, nw, nh))
+
+    if not span_boxes:
+        return None
+
+    # Union bounding box
+    x0 = min(b[0] for b in span_boxes)
+    y0 = min(b[1] for b in span_boxes)
+    x1 = max(b[0] + b[2] for b in span_boxes)
+    y1 = max(b[1] + b[3] for b in span_boxes)
+    return {'x': float(x0), 'y': float(y0), 'w': float(x1 - x0), 'h': float(y1 - y0)}
 
 
 def template_match_symbol(rendered_gray, symbol_asset, label_bounds_px):
@@ -447,9 +463,9 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
         else:
             log.info(f"  No match for {asset['file']}")
 
-    # 4. Extract text spans
-    text_spans = extract_text_spans(page, label_bounds_pt)
-    log.info(f"  Text spans: {len(text_spans)}")
+    # 4. Extract text region (one union bounding box, excluding symbol areas)
+    text_region = extract_text_region(page, label_bounds_pt, matched_symbols)
+    log.info(f"  Text region: {text_region}")
 
     # 5. Get label dimensions in mm
     full_text = page.get_text()
@@ -472,14 +488,14 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
         'title': title,
         'w_mm': w_mm, 'h_mm': h_mm,
         'symbols': matched_symbols,
-        'text_spans': text_spans,
+        'text_region': text_region,
         'debug': {
             'render_dpi': RENDER_DPI,
             'page_size_px': f"{img_w}x{img_h}",
             'label_bounds_px': [int(x) for x in label_bounds_px],
             'assets_tested': len(symbol_assets),
             'assets_matched': len(matched_symbols),
-            'text_spans': len(text_spans)
+            'has_text_region': text_region is not None
         }
     }
 
@@ -553,32 +569,16 @@ async def api_generate(label_id: str, dpi: int = 600):
             if asset and asset.get('image_b64'):
                 sym_images[sym['asset']] = asset['image_b64']
 
-        # Filter text: exclude spans overlapping matched symbol regions
-        syms = lab['symbols']
-        filtered_texts = []
-        for tf in lab['text_spans']:
-            tx, ty = float(tf.get('x', 0)), float(tf.get('y', 0))
-            overlaps = False
-            for s in syms:
-                sx, sy = float(s.get('x', 0)), float(s.get('y', 0))
-                sw, sh = float(s.get('w', 0)), float(s.get('h', 0))
-                if (tx >= sx - 0.02 and tx <= sx + sw + 0.02 and
-                    ty >= sy - 0.02 and ty <= sy + sh + 0.02):
-                    overlaps = True
-                    break
-            if not overlaps:
-                filtered_texts.append(tf)
-
         result = {
             "label_id": lab['id'],
             "title": lab['title'],
             "label_size": f"{lab['h_mm']} X {lab['w_mm']} mm",
             "w_mm": int(lab['w_mm']),
             "h_mm": int(lab['h_mm']),
-            "symbols": sanitize(syms),
-            "text_fields": sanitize(filtered_texts),
+            "symbols": sanitize(lab['symbols']),
+            "text_region": sanitize(lab.get('text_region')),
             "symbol_images": sym_images,
-            "symbols_placed": len(syms),
+            "symbols_placed": len(lab['symbols']),
             "convention": "template-matched",
             "debug": sanitize(lab['debug'])
         }
