@@ -510,42 +510,44 @@ async def api_catalog():
 
 @app.get("/api/generate/{label_id}")
 async def api_generate(label_id: str, dpi: int = 600):
-    """
-    Returns JSON with:
-    - symbols: list of {asset, x, y, w, h, confidence} (normalized 0-1)
-    - text_fields: list of {x, y, w, h, font_size} (normalized 0-1)
-    - label_dims: {w_mm, h_mm}
-    - symbol_images: dict of asset_filename -> base64 PNG
-    - debug: overlay info
-    """
-    c = load_catalog()
-    lab = next((l for l in c['labels'] if l['id'] == label_id), None)
-    if not lab:
-        raise HTTPException(404, f"Label not found: {label_id}")
+    """Generate label: returns normalized symbol positions + base64 images."""
+    try:
+        c = load_catalog()
+        lab = next((l for l in c['labels'] if l['id'] == label_id), None)
+        if not lab:
+            avail = [l['id'] for l in c['labels']]
+            return JSONResponse(content={"error": f"Not found: {label_id}", "available": avail}, status_code=404)
 
-    # Encode matched symbol assets as base64 for frontend rendering
-    sym_images = {}
-    for sym in lab['symbols']:
-        asset = next((a for a in c['assets'] if a['file'] == sym['asset']), None)
-        if asset:
-            img = Image.fromarray(asset['image'])
-            buf = io.BytesIO()
-            img.save(buf, format='PNG')
-            sym_images[sym['asset']] = base64.b64encode(buf.getvalue()).decode()
+        # Encode matched symbol assets as base64 for frontend rendering
+        sym_images = {}
+        for sym in lab['symbols']:
+            asset = next((a for a in c['assets'] if a['file'] == sym['asset']), None)
+            if asset is not None and asset.get('image') is not None:
+                try:
+                    img = Image.fromarray(asset['image'])
+                    buf = io.BytesIO()
+                    img.save(buf, format='PNG')
+                    sym_images[sym['asset']] = base64.b64encode(buf.getvalue()).decode()
+                except Exception as enc_err:
+                    log.error(f"Image encode error {sym['asset']}: {enc_err}")
 
-    return {
-        "label_id": lab['id'],
-        "title": lab['title'],
-        "label_size": f"{lab['h_mm']} X {lab['w_mm']} mm",
-        "w_mm": lab['w_mm'],
-        "h_mm": lab['h_mm'],
-        "symbols": lab['symbols'],
-        "text_fields": lab['text_spans'],
-        "symbol_images": sym_images,
-        "symbols_placed": len(lab['symbols']),
-        "convention": "template-matched",
-        "debug": lab['debug']
-    }
+        result = {
+            "label_id": lab['id'],
+            "title": lab['title'],
+            "label_size": f"{lab['h_mm']} X {lab['w_mm']} mm",
+            "w_mm": int(lab['w_mm']),
+            "h_mm": int(lab['h_mm']),
+            "symbols": sanitize(lab['symbols']),
+            "text_fields": sanitize(lab['text_spans']),
+            "symbol_images": sym_images,
+            "symbols_placed": len(lab['symbols']),
+            "convention": "template-matched",
+            "debug": sanitize(lab['debug'])
+        }
+        return JSONResponse(content=result)
+    except Exception as e:
+        log.error(f"Generate error for {label_id}: {e}", exc_info=True)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
 @app.get("/api/generate/{label_id}/image")
