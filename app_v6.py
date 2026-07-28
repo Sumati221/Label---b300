@@ -830,6 +830,12 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
     label_crop = full_rendered[by:by+bh, bx:bx+bw]
     log.info(f"  Cropped label: {label_crop.shape[1]}x{label_crop.shape[0]}px")
 
+    # Keep the approved drawing artwork as the preview base. This preserves
+    # printed text and layout rather than rebuilding a blank label from only
+    # detected symbols.
+    encoded, label_png = cv2.imencode('.png', label_crop)
+    label_image_b64 = base64.b64encode(label_png.tobytes()).decode() if encoded else None
+
     # 5. Component-based matching (text masked, graphic blobs isolated, IoU scored)
     matched_symbols, failed_symbols, n_components, text_region = \
         component_match_pipeline(page, label_crop, (bx, by, bw, bh), symbol_assets,
@@ -852,6 +858,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
         'w_mm': w_mm, 'h_mm': h_mm,
         'symbols': matched_symbols,
         'text_region': text_region,
+        'label_image': label_image_b64,
         'debug': {
             'render_dpi': RENDER_DPI,
             'page_size_px': f"{img_w}x{img_h}",
@@ -1085,6 +1092,7 @@ def build_generation_response(lab, assets):
         "symbols": sanitize(symbols),
         "symbol_specifications": [s['specification'] for s in symbols if 'specification' in s],
         "text_region": sanitize(lab.get('text_region')),
+        "label_image": lab.get('label_image'),
         "symbol_images": sym_images,
         "symbols_placed": len(lab['symbols']),
         "convention": "template-matched",
