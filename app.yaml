@@ -11,3 +11,5 @@ command:
 env:
   - name: MPLCONFIGDIR
     value: /tmp/matplotlib
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse

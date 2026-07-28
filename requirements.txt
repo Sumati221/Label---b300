@@ -6,3 +6,4 @@ PyMuPDF
 opencv-python-headless
 openpyxl
 python-multipart
+databricks-sdk

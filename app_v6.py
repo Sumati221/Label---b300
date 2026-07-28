@@ -46,6 +46,7 @@ except (ImportError, OSError):
     HAS_CAIRO = False
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 from fastapi.responses import HTMLResponse, Response, JSONResponse
 import json
 
@@ -92,6 +93,17 @@ def sanitize(obj):
     return obj
 
 
+def unwrap_ai_extract_values(value):
+    """Flatten ai_extract v2.1 scalar wrappers (for example ``{"value": "x"}``)."""
+    if isinstance(value, dict):
+        if set(value) == {"value"}:
+            return unwrap_ai_extract_values(value["value"])
+        return {key: unwrap_ai_extract_values(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [unwrap_ai_extract_values(item) for item in value]
+    return value
+
+
 app = FastAPI(title="B300 Label Generator v6", docs_url="/docs")
 
 _APP = Path(__file__).parent
@@ -100,6 +112,21 @@ RENDER_DPI = 300  # DPI for PDF rasterization during matching
 MATCH_THRESHOLD = 0.15  # IoU-based scoring yields lower values than template correlation
 LABEL_EDGE_MARGIN_MM = 1.0  # Keep all placed symbols clear of the blank label border
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # Uploads are processed temporarily, never retained.
+
+# This schema turns a human edit request into a bounded operation.  The client
+# still applies the edit visibly and the human decides whether to keep it.
+AI_EDIT_SCHEMA = {
+    "operation": {"type": "string", "description": "One of move_symbol, resize_symbol, replace_text, or unsupported."},
+    "target": {"type": "string", "description": "Symbol name/code or the label text to edit."},
+    "direction": {"type": "string", "description": "left, right, up, down, increase, decrease, or none."},
+    "amount": {"type": "number", "description": "Numeric movement or resize amount, otherwise 0."},
+    "unit": {"type": "string", "description": "mm, percent, or none."},
+    "replacement_text": {"type": "string", "description": "Replacement label text when operation is replace_text; otherwise empty."},
+}
+
+
+class EditRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=2000)
 
 # Extracted from the controlled specification documents. These values are kept
 # with the app so label generation does not depend on a live AI/SQL request.
@@ -488,8 +515,13 @@ def extract_text_region(page, label_bounds_pt, matched_symbols):
     return {'x': float(x0), 'y': float(y0), 'w': float(x1 - x0), 'h': float(y1 - y0)}
 
 
-def extract_text_elements(page, label_bounds_px, matched_symbols):
-    """Return editable PDF text spans in normalized label coordinates."""
+def extract_text_elements(page, label_bounds_px, matched_symbols, include_symbol_text=True):
+    """Return editable PDF text spans in normalized label coordinates.
+
+    ``include_symbol_text`` keeps codes or other vector text printed inside a
+    symbol available to the human editor, while the country-text region can
+    still deliberately omit it.
+    """
     bx, by, bw, bh = label_bounds_px
     scale = RENDER_DPI / 72
     lx, ly, lw, lh = bx / scale, by / scale, bw / scale, bh / scale
@@ -510,10 +542,11 @@ def extract_text_elements(page, label_bounds_px, matched_symbols):
                 h = min(1.0 - y, (sy1 - sy0) / lh)
                 if w < 0.002 or h < 0.002:
                     continue
-                # Symbol artwork contains its own small text; leave that with the symbol layer.
-                if any(x < s['x'] + s['w'] and x + w > s['x'] and
-                       y < s['y'] + s['h'] and y + h > s['y']
-                       for s in matched_symbols):
+                if not include_symbol_text and any(
+                    x < s['x'] + s['w'] and x + w > s['x'] and
+                    y < s['y'] + s['h'] and y + h > s['y']
+                    for s in matched_symbols
+                ):
                     continue
                 elements.append({
                     'text': text,
@@ -893,7 +926,10 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
         component_match_pipeline(page, label_crop, (bx, by, bw, bh), symbol_assets,
                                  w_mm=w_mm, h_mm=h_mm)
     text_elements = extract_text_elements(page, (bx, by, bw, bh), matched_symbols)
-    editable_country_region = country_text_region(text_elements)
+    country_elements = extract_text_elements(
+        page, (bx, by, bw, bh), matched_symbols, include_symbol_text=False
+    )
+    editable_country_region = country_text_region(country_elements)
     n_matched = len(matched_symbols)
     log.info(f"  Result: {n_matched} matched, {len(failed_symbols)} skipped, "
              f"{n_components} components")
@@ -1119,6 +1155,53 @@ async def api_symbol_specification(symbol_id: str):
     if not specification:
         raise HTTPException(404, f"No specification found for symbol {symbol_id}")
     return specification
+
+
+@app.post("/api/interpret-edit")
+async def api_interpret_edit(request: EditRequest):
+    """Interpret a human editing request with ai_extract on the app warehouse.
+
+    This endpoint deliberately returns a proposed, structured operation only.
+    It never writes the drawing, PDF, specification, or regulatory data.
+    """
+    warehouse_id = os.getenv("DATABRICKS_WAREHOUSE_ID")
+    if not warehouse_id:
+        return JSONResponse(
+            content={"error": "AI editing is not configured for this app."},
+            status_code=503,
+        )
+
+    command = request.command.strip()
+    schema_literal = json.dumps(AI_EDIT_SCHEMA, separators=(",", ":")).replace("'", "''")
+    command_literal = "'" + command.replace("'", "''") + "'"
+    statement = (
+        "SELECT to_json(ai_extract("
+        f"{command_literal}, '{schema_literal}', map('version','2.1')):response) AS edit"
+    )
+
+    try:
+        from databricks.sdk import WorkspaceClient
+
+        result = WorkspaceClient().statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=statement,
+            wait_timeout="30s",
+        )
+        state = str(getattr(getattr(result, "status", None), "state", ""))
+        if "SUCCEEDED" not in state:
+            message = getattr(getattr(result, "status", None), "error", None) or "AI request did not complete."
+            return JSONResponse(content={"error": str(message)}, status_code=502)
+        rows = getattr(getattr(result, "result", None), "data_array", None) or []
+        if not rows or not rows[0]:
+            return JSONResponse(content={"error": "AI returned no proposed edit."}, status_code=502)
+        proposed_edit = unwrap_ai_extract_values(json.loads(rows[0][0]))
+        return {"proposal": proposed_edit, "review_required": True}
+    except Exception as exc:
+        log.error("AI edit interpretation failed: %s", exc, exc_info=True)
+        return JSONResponse(
+            content={"error": "Unable to interpret this edit request right now."},
+            status_code=502,
+        )
 
 
 def build_generation_response(lab, assets):
