@@ -91,7 +91,6 @@ _APP = Path(__file__).parent
 _SYMBOLS = _APP / "data" / "symbols"
 RENDER_DPI = 300  # DPI for PDF rasterization during matching
 MATCH_THRESHOLD = 0.15  # IoU-based scoring yields lower values than template correlation
-SYMBOL_SIZE_MM = 5  # Largest symbol dimension; preserve aspect ratio when rendering
 
 # Extracted from the controlled specification documents. These values are kept
 # with the app so label generation does not depend on a live AI/SQL request.
@@ -495,7 +494,7 @@ def match_asset_to_component(symbol_asset, component):
 def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets,
                              w_mm=85, h_mm=50):
     """Component-based matching: mask text, find blobs, match assets.
-    Symbols rendered at SYMBOL_SIZE_MM, centered on detected component."""
+    Keep detected component dimensions unless a controlled specification overrides them."""
     bx, by, bw, bh = label_bounds_px
     text_mask = build_text_mask(page, label_bounds_px, RENDER_DPI)
     components = find_graphic_components(label_crop, text_mask)
@@ -519,16 +518,29 @@ def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets,
         if best_score >= MATCH_THRESHOLD and best_idx >= 0:
             comp = components[best_idx]
             used.add(best_idx)
-            # Fixed 5mm symbol size, preserve aspect ratio, center on component
-            sym_asp = asset['w'] / max(asset['h'], 1)
-            if sym_asp >= 1:  # wider than tall
-                sym_w_mm = SYMBOL_SIZE_MM
-                sym_h_mm = SYMBOL_SIZE_MM / sym_asp
-            else:  # taller than wide
-                sym_h_mm = SYMBOL_SIZE_MM
-                sym_w_mm = SYMBOL_SIZE_MM * sym_asp
-            norm_w = sym_w_mm / w_mm
-            norm_h = sym_h_mm / h_mm
+            # Start with the size detected on the source label.
+            norm_w = float(comp['w']) / bw
+            norm_h = float(comp['h']) / bh
+            sym_w_mm = norm_w * w_mm
+            sym_h_mm = norm_h * h_mm
+
+            # Apply only a specification that explicitly controls size.
+            specification = get_symbol_specification(asset['code'])
+            if specification and specification.get('required_width_mm'):
+                sym_w_mm = specification['required_width_mm']
+                sym_h_mm = sym_w_mm / (asset['w'] / max(asset['h'], 1))
+                norm_w = sym_w_mm / w_mm
+                norm_h = sym_h_mm / h_mm
+            elif specification and specification.get('minimum_size_mm'):
+                min_size_mm = specification['minimum_size_mm']
+                detected_max_mm = max(sym_w_mm, sym_h_mm)
+                if detected_max_mm < min_size_mm:
+                    scale = min_size_mm / max(detected_max_mm, 0.001)
+                    sym_w_mm *= scale
+                    sym_h_mm *= scale
+                    norm_w = sym_w_mm / w_mm
+                    norm_h = sym_h_mm / h_mm
+
             # Center on component's centroid
             cx = (comp['x'] + comp['w'] / 2) / bw
             cy = (comp['y'] + comp['h'] / 2) / bh
