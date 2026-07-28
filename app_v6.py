@@ -443,8 +443,10 @@ def match_asset_to_component(symbol_asset, component):
     return iou * (0.5 + 0.5 * asp_sim)
 
 
-def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets):
-    """Component-based matching: mask text, find blobs, match assets."""
+def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets,
+                             w_mm=85, h_mm=50):
+    """Component-based matching: mask text, find blobs, match assets.
+    Symbols rendered at SYMBOL_SIZE_MM, centered on detected component."""
     bx, by, bw, bh = label_bounds_px
     text_mask = build_text_mask(page, label_bounds_px, RENDER_DPI)
     components = find_graphic_components(label_crop, text_mask)
@@ -468,16 +470,31 @@ def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets):
         if best_score >= MATCH_THRESHOLD and best_idx >= 0:
             comp = components[best_idx]
             used.add(best_idx)
+            # Fixed 5mm symbol size, preserve aspect ratio, center on component
+            sym_asp = asset['w'] / max(asset['h'], 1)
+            if sym_asp >= 1:  # wider than tall
+                sym_w_mm = SYMBOL_SIZE_MM
+                sym_h_mm = SYMBOL_SIZE_MM / sym_asp
+            else:  # taller than wide
+                sym_h_mm = SYMBOL_SIZE_MM
+                sym_w_mm = SYMBOL_SIZE_MM * sym_asp
+            norm_w = sym_w_mm / w_mm
+            norm_h = sym_h_mm / h_mm
+            # Center on component's centroid
+            cx = (comp['x'] + comp['w'] / 2) / bw
+            cy = (comp['y'] + comp['h'] / 2) / bh
+            norm_x = max(0.0, cx - norm_w / 2)
+            norm_y = max(0.0, cy - norm_h / 2)
             matched.append({
                 'asset': asset['file'], 'code': asset['code'],
-                'x': float(comp['x']) / bw,
-                'y': float(comp['y']) / bh,
-                'w': float(comp['w']) / bw,
-                'h': float(comp['h']) / bh,
+                'x': round(norm_x, 4),
+                'y': round(norm_y, 4),
+                'w': round(norm_w, 4),
+                'h': round(norm_h, 4),
                 'confidence': round(best_score, 4)
             })
             log.info(f"  MATCH {asset['file']} -> comp[{best_idx}] "
-                     f"score={best_score:.4f}")
+                     f"score={best_score:.4f} size={sym_w_mm:.1f}x{sym_h_mm:.1f}mm")
         else:
             unmatched.append({
                 'asset': asset['file'],
@@ -672,7 +689,8 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
 
     # 5. Component-based matching (text masked, graphic blobs isolated, IoU scored)
     matched_symbols, failed_symbols, n_components, text_region = \
-        component_match_pipeline(page, label_crop, (bx, by, bw, bh), symbol_assets)
+        component_match_pipeline(page, label_crop, (bx, by, bw, bh), symbol_assets,
+                                 w_mm=w_mm, h_mm=h_mm)
     n_matched = len(matched_symbols)
     log.info(f"  Result: {n_matched} matched, {len(failed_symbols)} skipped, "
              f"{n_components} components")
