@@ -593,7 +593,12 @@ def fallback_country_text_region(matched_symbols: List[Dict]) -> Dict:
         if get_symbol_specification(symbol.get('code', '')) is not None
     ]
     symbol_top = min((symbol['y'] for symbol in approved_symbols), default=0.76)
-    top, bottom = 0.18, max(0.36, symbol_top - 0.025)
+    # Thai labels begin with the country-specific importer line.  Brazilian
+    # labels reserve the upper band for the PHILIPS wordmark, so their text
+    # field begins below that brand area.
+    is_thai_layout = any(symbol.get('code') == '100183' for symbol in approved_symbols)
+    top = 0.06 if is_thai_layout else 0.18
+    bottom = max(top + 0.16, symbol_top - 0.025)
     return {
         'x': 0.06,
         'y': top,
