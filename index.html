@@ -22,7 +22,8 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .label-container img.symbol{position:absolute;pointer-events:none}
 .controlled-symbol{position:absolute;z-index:5;background:#fff;pointer-events:none}
 .controlled-symbol img{width:100%;height:100%;object-fit:fill;display:block}
-.label-container .country-text-field{position:absolute;z-index:6;border:1px dashed #1a73e8;background:#fff;color:#222;font-family:Arial,sans-serif;line-height:1.18;padding:3px 4px;outline:none;overflow:hidden;resize:none;box-shadow:0 0 0 1px rgba(26,115,232,.12)}
+.label-container .country-text-field{position:absolute;z-index:6;border:1px dashed #1a73e8;background:#fff;color:#222;font-family:Arial,sans-serif;line-height:1.18;padding:3px 4px;outline:none;overflow:auto;white-space:pre-wrap;box-shadow:0 0 0 1px rgba(26,115,232,.12)}
+.label-container .country-text-field p,.label-container .country-text-field div{margin:0 0 2px}
 .label-container .country-text-field:focus{border-color:#0d47a1;background:#f7fbff}
 .meta{font-size:11px;color:#666;margin-top:8px;text-align:center}
 .log{margin-top:12px;background:#f5f5f7;border-radius:6px;padding:6px;font-size:9px;font-family:monospace;max-height:140px;overflow-y:auto;line-height:1.6;color:#555}
@@ -112,6 +113,48 @@ function escapeHtml(value){
   }[char]));
 }
 
+function plainTextToHtml(value){return escapeHtml(value||'').replace(/\n/g,'<br>');}
+function allowedTextStyle(element){
+  const styles=[];
+  const weight=element.style.fontWeight;
+  const italic=element.style.fontStyle;
+  const size=element.style.fontSize;
+  const family=element.style.fontFamily;
+  if(/^(bold|[6-9]00)$/i.test(weight))styles.push('font-weight:bold');
+  if(/^italic$/i.test(italic))styles.push('font-style:italic');
+  if(/^[0-9.]+(pt|px)$/i.test(size))styles.push(`font-size:${size}`);
+  if(/^[a-z0-9 ,"'\-]+$/i.test(family))styles.push(`font-family:${family}`);
+  return styles.length?` style="${styles.join(';')}"`:'';
+}
+function sanitizeCountryHtml(value){
+  const doc=new DOMParser().parseFromString(value||'','text/html');
+  function clean(node){
+    if(node.nodeType===Node.TEXT_NODE)return escapeHtml(node.nodeValue||'');
+    if(node.nodeType!==Node.ELEMENT_NODE)return '';
+    const tag=node.tagName.toLowerCase();
+    const inner=[...node.childNodes].map(clean).join('');
+    if(tag==='br')return '<br>';
+    const style=allowedTextStyle(node);
+    if(['b','strong'].includes(tag))return `<strong${style}>${inner}</strong>`;
+    if(['i','em'].includes(tag))return `<em${style}>${inner}</em>`;
+    if(['span','font'].includes(tag))return `<span${style}>${inner}</span>`;
+    if(['p','div'].includes(tag))return `<div${style}>${inner}</div>`;
+    return inner;
+  }
+  return [...doc.body.childNodes].map(clean).join('');
+}
+function updateCountryText(element){
+  if(lastRender)lastRender.data._countryHtml=sanitizeCountryHtml(element.innerHTML);
+}
+function pasteCountryText(event){
+  event.preventDefault();
+  const clipboard=event.clipboardData||window.clipboardData;
+  const rich=clipboard.getData('text/html');
+  const safe=rich?sanitizeCountryHtml(rich):plainTextToHtml(clipboard.getData('text/plain'));
+  document.execCommand('insertHTML',false,safe);
+  updateCountryText(event.currentTarget);
+}
+
 function onSelect(){
   currentId=document.getElementById('sel').value;
   if(currentId) document.getElementById('pdfUpload').value='';
@@ -171,8 +214,8 @@ async function generate(){
 }
 function renderLabel(data,countryText=''){
   const countryRegion=data.country_text_region;
-  if(!data._countryText){data._countryText=countryText||(countryRegion?countryRegion.text:'');}
-  if(countryText)data._countryText=countryText;
+  if(!data._countryHtml)data._countryHtml=plainTextToHtml(countryText||(countryRegion?countryRegion.text:''));
+  if(countryText)data._countryHtml=plainTextToHtml(countryText);
   lastRender={data,countryText};
   const preview=document.getElementById('preview');
   const SCALE=3.5;
@@ -194,15 +237,12 @@ function renderLabel(data,countryText=''){
     const tx=(countryRegion.x*100).toFixed(2),ty=(countryRegion.y*100).toFixed(2);
     const tw=(countryRegion.w*100).toFixed(2),th=(countryRegion.h*100).toFixed(2);
     const fontPx=Math.max(8,Math.min(18,Number(countryRegion.font_size||2.8)*SCALE));
-    html+=`<textarea class="country-text-field" aria-label="Country-specific label text" title="Country-specific label text" placeholder="Country-specific label text" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateCountryText(this.value)">${escapeHtml(data._countryText||'')}</textarea>`;
+    html+=`<div class="country-text-field" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Country-specific label text" title="Paste Word text here; bold, italic, font size, and font family are retained" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateCountryText(this)" onpaste="pasteCountryText(event)">${data._countryHtml||'<span style="color:#777">Country-specific label text</span>'}</div>`;
   }
   html+=`</div>`;
   html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
   preview.innerHTML=html;
   return Boolean(countryText&&countryRegion);
-}
-function updateCountryText(value){
-  if(lastRender)lastRender.data._countryText=value;
 }
 function addLog(msg,err=false,ok=false){
   const b=document.getElementById('logBox');
