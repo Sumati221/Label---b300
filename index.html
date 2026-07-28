@@ -53,6 +53,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 <select id="dpi"><option value="300">300 DPI</option><option value="600" selected>600 DPI</option></select>
 
 <button class="btn" id="genBtn" onclick="generate()" disabled>Generate Label</button>
+<button class="btn" id="downloadBtn" onclick="downloadLabelPng()" disabled>Download Label PNG</button>
 
 <div class="log" id="logBox"></div>
 </div>
@@ -143,6 +144,37 @@ function sanitizeCountryHtml(value){
   }
   return [...doc.body.childNodes].map(clean).join('');
 }
+function rtfToHtml(rtf){
+  let out='',bold=false,italic=false,fontSize='';
+  const stack=[];
+  const wrap=text=>{
+    const style=fontSize?` style="font-size:${fontSize}"`:'';
+    let result=bold?`<strong${style}>${text}</strong>`:(fontSize?`<span${style}>${text}</span>`:text);
+    if(italic)result=`<em>${result}</em>`;
+    return result;
+  };
+  for(let i=0;i<rtf.length;i++){
+    const character=rtf[i];
+    if(character==='{'){
+      const destination=/^\{\\(?:fonttbl|colortbl|stylesheet|info|generator|\*)/.test(rtf.slice(i));
+      stack.push({bold,italic,fontSize,skip:destination||(stack.length&&stack[stack.length-1].skip)});continue;
+    }
+    if(character==='}'){const state=stack.pop();if(state){bold=state.bold;italic=state.italic;fontSize=state.fontSize;}continue;}
+    if(stack.length&&stack[stack.length-1].skip)continue;
+    if(character!=='\\'){out+=wrap(escapeHtml(character));continue;}
+    const match=rtf.slice(i+1).match(/^(b|i|fs|par|line|tab|u)(-?\d+)? ?/);
+    if(!match){i++;continue;}
+    i+=match[0].length;
+    const word=match[1],number=match[2];
+    if(word==='b')bold=number!=='0';
+    else if(word==='i')italic=number!=='0';
+    else if(word==='fs'&&number)fontSize=`${Math.max(5,Math.min(28,Number(number)/2))}pt`;
+    else if(word==='par'||word==='line')out+='<br>';
+    else if(word==='tab')out+='&nbsp;&nbsp;&nbsp;&nbsp;';
+    else if(word==='u'&&number)out+=wrap(escapeHtml(String.fromCharCode(Number(number)<0?Number(number)+65536:Number(number))));
+  }
+  return out;
+}
 function updateCountryText(element){
   if(lastRender)lastRender.data._countryHtml=sanitizeCountryHtml(element.innerHTML);
 }
@@ -150,7 +182,8 @@ function pasteCountryText(event){
   event.preventDefault();
   const clipboard=event.clipboardData||window.clipboardData;
   const rich=clipboard.getData('text/html');
-  const safe=rich?sanitizeCountryHtml(rich):plainTextToHtml(clipboard.getData('text/plain'));
+  const rtf=clipboard.getData('text/rtf');
+  const safe=rich?sanitizeCountryHtml(rich):(rtf?rtfToHtml(rtf):plainTextToHtml(clipboard.getData('text/plain')));
   document.execCommand('insertHTML',false,safe);
   updateCountryText(event.currentTarget);
 }
@@ -206,6 +239,7 @@ async function generate(){
       h+='</div>';preview.innerHTML=h;addLog(data.error,true);return;}
     const countryText=await getCountryLabelText();
     const textWasPlaced=renderLabel(data,countryText);
+    document.getElementById('downloadBtn').disabled=false;
     if(countryText&&!textWasPlaced) addLog('CDLM text was found, but this template has no detected editable text region. It was not placed automatically.',true);
     const notPresent=data.debug&&data.debug.failed_symbols?data.debug.failed_symbols.filter(f=>f.confidence===0).length:0;
     addLog(`Matched ${data.symbols_placed} symbol(s); ${notPresent} asset(s) not in this label.`,false,true);
@@ -243,6 +277,43 @@ function renderLabel(data,countryText=''){
   html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
   preview.innerHTML=html;
   return Boolean(countryText&&countryRegion);
+}
+async function downloadLabelPng(){
+  const label=document.querySelector('.label-container');
+  if(!label||!lastRender)return;
+  const dpi=Number(document.getElementById('dpi').value);
+  const width=Math.round(lastRender.data.w_mm/25.4*dpi);
+  const height=Math.round(lastRender.data.h_mm/25.4*dpi);
+  const previewWidth=label.getBoundingClientRect().width;
+  const scale=width/previewWidth;
+  const clone=label.cloneNode(true);
+  clone.style.width=`${width}px`;clone.style.height=`${height}px`;
+  clone.style.border=`${Math.max(1,2*scale)}px solid #1a73e8`;
+  clone.style.borderRadius=`${4*scale}px`;
+  clone.querySelectorAll('[contenteditable]').forEach(field=>{
+    field.removeAttribute('contenteditable');
+    field.style.overflow='hidden';
+    field.style.border='0';
+    field.style.boxShadow='none';
+    field.style.background='#fff';
+    const size=parseFloat(field.style.fontSize||'10');
+    if(size)field.style.fontSize=`${size*scale}px`;
+  });
+  const exportCss=`*{box-sizing:border-box}.label-container{position:relative;background:#fff;overflow:hidden}.template-base{position:absolute;inset:0;width:100%;height:100%;object-fit:fill}.controlled-symbol{position:absolute;background:#fff;z-index:5}.controlled-symbol img{width:100%;height:100%;object-fit:fill;display:block}.country-text-field{position:absolute;z-index:6;color:#222;font-family:Arial,sans-serif;line-height:1.18;padding:${3*scale}px ${4*scale}px;white-space:pre-wrap;overflow:hidden}.country-text-field p,.country-text-field div{margin:0 0 ${2*scale}px}.country-text-field strong{font-weight:bold}.country-text-field em{font-style:italic}`;
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>${exportCss}</style>${clone.outerHTML}</div></foreignObject></svg>`;
+  const image=new Image();
+  image.onload=()=>{
+    const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
+    const context=canvas.getContext('2d');context.drawImage(image,0,0,width,height);
+    canvas.toBlob(blob=>{
+      if(!blob)return;
+      const link=document.createElement('a');
+      link.href=URL.createObjectURL(blob);
+      link.download=`${lastRender.data.label_id||'label'}-${dpi}dpi.png`;
+      link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+    },'image/png');
+  };
+  image.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);
 }
 function addLog(msg,err=false,ok=false){
   const b=document.getElementById('logBox');
