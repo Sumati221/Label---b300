@@ -21,10 +21,6 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .label-container img.symbol{position:absolute;pointer-events:none}
 .label-container .text-field{position:absolute;border:1px dashed #aaa;background:rgba(255,255,200,.3);font-size:inherit;padding:1px 2px;outline:none;overflow:hidden;resize:none}
 .label-container .text-field:focus{border-color:#1a73e8;background:rgba(200,230,255,.3)}
-.debug-box{position:absolute;pointer-events:none}
-.debug-box.symbol-box{border:1px solid red}
-.debug-box.text-box{border:1px solid green}
-.debug-label{position:absolute;font-size:7px;color:red;white-space:nowrap}
 .meta{font-size:11px;color:#666;margin-top:8px;text-align:center}
 .log{margin-top:12px;background:#f5f5f7;border-radius:6px;padding:6px;font-size:9px;font-family:monospace;max-height:140px;overflow-y:auto;line-height:1.6;color:#555}
 .toggle{display:flex;align-items:center;gap:6px;margin:8px 0;font-size:11px}
@@ -43,9 +39,6 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 <div class="info" id="info"><b>Status:</b> Select a label</div>
 
 <h2>2. Settings</h2>
-<div class="toggle">
-  <input type="checkbox" id="dbg" checked><label for="dbg">Show debug overlay</label>
-</div>
 <select id="dpi"><option value="300">300 DPI</option><option value="600" selected>600 DPI</option></select>
 
 <button class="btn" id="genBtn" onclick="generate()" disabled>Generate Label</button>
@@ -94,7 +87,6 @@ async function generate(){
   btn.disabled=true; btn.textContent='Detecting...';
   addLog('Running template matching...');
   const dpi=document.getElementById('dpi').value;
-  const showDebug=document.getElementById('dbg').checked;
 
   try{
     const r=await fetch(`/api/generate/${encodeURIComponent(currentId)}?dpi=${dpi}`);
@@ -108,15 +100,14 @@ async function generate(){
         h+='<ul style="font-size:11px;margin:8px 0 8px 16px">';
         data.failed_symbols.forEach(f=>{h+=`<li><b>${f.asset}</b>: ${f.reason} (conf:${(f.confidence||0).toFixed(3)})</li>`;});
         h+='</ul>';}
-      if(data.debug) h+=`<pre style="font-size:8px;margin-top:8px;background:#f5f5f5;padding:6px;border-radius:4px;overflow:auto;max-height:200px">${JSON.stringify(data.debug,null,2)}</pre>`;
       h+='</div>';preview.innerHTML=h;addLog(data.error,true);return;}
-    renderLabel(data,showDebug);
+    renderLabel(data);
     const notPresent=data.debug&&data.debug.failed_symbols?data.debug.failed_symbols.filter(f=>f.confidence===0).length:0;
     addLog(`Matched ${data.symbols_placed} symbol(s); ${notPresent} asset(s) not in this label.`,false,true);
   }catch(e){addLog(e.message,true)}
   finally{btn.disabled=false;btn.textContent='Generate Label'}
 }
-function renderLabel(data,showDebug){
+function renderLabel(data){
   const preview=document.getElementById('preview');
   const SCALE=3.5;
   const wPx=data.w_mm*SCALE;
@@ -128,21 +119,15 @@ function renderLabel(data,showDebug){
     const x=(sym.x*100).toFixed(2),y=(sym.y*100).toFixed(2);
     const w=(sym.w*100).toFixed(2),h=(sym.h*100).toFixed(2);
     html+=`<img class="symbol" src="data:image/png;base64,${imgData}" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%;filter:grayscale(100%)">`;
-    if(showDebug){
-      html+=`<div class="debug-box symbol-box" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%"></div>`;
-      html+=`<span class="debug-label" style="left:${x}%;top:calc(${y}% - 9px)">${sym.asset} (${(sym.confidence||0).toFixed(2)})</span>`;
-    }
   });
   const tr=data.text_region;
   if(tr){
     const tx=(tr.x*100).toFixed(2),ty=(tr.y*100).toFixed(2);
     const tw=(tr.w*100).toFixed(2),th=(tr.h*100).toFixed(2);
     html+=`<textarea style="position:absolute;left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;border:1px solid #999;background:#fff;font-family:Arial;font-size:9px;padding:4px;outline:none;resize:none" placeholder="Product information"></textarea>`;
-    if(showDebug) html+=`<div class="debug-box text-box" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%"></div>`;
   }
   html+=`</div>`;
   html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
-  if(showDebug&&data.debug) html+=`<pre style="font-size:8px;margin-top:6px;background:#f5f5f5;padding:6px;border-radius:4px;max-width:500px;overflow:auto">${JSON.stringify(data.debug,null,2)}</pre>`;
   preview.innerHTML=html;
 }
 function addLog(msg,err=false,ok=false){
