@@ -20,8 +20,10 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .label-container{position:relative;border:2px solid #1a73e8;border-radius:4px;box-shadow:0 2px 12px rgba(0,0,0,.1);background:#fff}
 .label-container .template-base{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}
 .label-container img.symbol{position:absolute;pointer-events:none}
-.ai-editor-btn{position:absolute;right:6px;bottom:6px;z-index:20;border:0;border-radius:12px;background:#0d47a1;color:#fff;font-size:10px;font-weight:700;padding:5px 8px;cursor:pointer}
-.ai-add-text-btn{position:absolute;right:72px;bottom:6px;z-index:20;border:0;border-radius:12px;background:#fff;color:#0d47a1;border:1px solid #0d47a1;font-size:10px;font-weight:700;padding:4px 7px;cursor:pointer}
+.editor-toolbar{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:10px}
+.ai-editor-btn,.ai-add-text-btn{border-radius:12px;font-size:11px;font-weight:700;padding:6px 10px;cursor:pointer}
+.ai-editor-btn{border:0;background:#0d47a1;color:#fff}
+.ai-add-text-btn{background:#fff;color:#0d47a1;border:1px solid #0d47a1}
 .editor-item{position:absolute;z-index:10;resize:both;overflow:hidden;border:1px dashed #0d47a1;background:#fff}
 .editor-item img{width:100%;height:100%;object-fit:fill;display:block;pointer-events:none}
 .editor-text textarea{width:100%;height:100%;display:block;border:0;outline:0;resize:none;background:#fff;color:#111;font-family:Arial,sans-serif;line-height:1.05;padding:2px 2px 1px 11px}
@@ -215,12 +217,13 @@ function renderLabel(data,countryText=''){
       html+=`<div class="editor-item editor-text" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%;font-size:${font}px"><button class="drag-handle" type="button" aria-label="Move text">↕</button><textarea aria-label="Editable text ${index+1}">${escapeHtml(item.text)}</textarea></div>`;
     });
   }
-  if(hasTemplateArtwork){
-    if(editorMode) html+=`<button class="ai-add-text-btn" type="button" onclick="addTextBox()">+ Text</button>`;
-    html+=`<button class="ai-editor-btn" type="button" onclick="toggleEditor()">${editorMode?'Done':'AI editor'}</button>`;
-  }
   html+=`</div>`;
   html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
+  if(hasTemplateArtwork){
+    html+=`<div class="editor-toolbar">`;
+    if(editorMode) html+=`<button class="ai-add-text-btn" type="button" onclick="addTextBox()">+ Text</button>`;
+    html+=`<button class="ai-editor-btn" type="button" onclick="toggleEditor()">${editorMode?'Done':'AI editor'}</button></div>`;
+  }
   preview.innerHTML=html;
   if(editorMode) enableEditorDragging();
   return textWasPlaced;
@@ -260,8 +263,7 @@ function addTextBox(){
   item.className='editor-item editor-text';
   item.style.cssText='left:35%;top:68%;width:42%;height:14%;font-size:10px';
   item.innerHTML='<button class="drag-handle" type="button" aria-label="Move text">↕</button><textarea aria-label="Editable text" placeholder="Type label text"></textarea>';
-  const editorButton=label.querySelector('.ai-editor-btn');
-  label.insertBefore(item,editorButton);
+  label.appendChild(item);
   enableEditorDragging();
   item.querySelector('textarea').focus();
 }
