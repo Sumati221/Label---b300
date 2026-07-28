@@ -524,6 +524,22 @@ def extract_text_elements(page, label_bounds_px, matched_symbols):
     return elements
 
 
+def country_text_region(text_elements):
+    """Merge the label's printable text into one editable country-information area."""
+    if not text_elements:
+        return None
+    x0 = min(item['x'] for item in text_elements)
+    y0 = min(item['y'] for item in text_elements)
+    x1 = max(item['x'] + item['w'] for item in text_elements)
+    y1 = max(item['y'] + item['h'] for item in text_elements)
+    return {
+        'x': round(x0, 4), 'y': round(y0, 4),
+        'w': round(x1 - x0, 4), 'h': round(y1 - y0, 4),
+        'font_size': round(min(item['font_size'] for item in text_elements), 2),
+        'text': '\n'.join(item['text'] for item in text_elements),
+    }
+
+
 def build_text_mask(page, label_bounds_px, render_dpi):
     """Build binary mask of text regions inside the label crop."""
     bx, by, bw, bh = label_bounds_px
@@ -877,6 +893,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
         component_match_pipeline(page, label_crop, (bx, by, bw, bh), symbol_assets,
                                  w_mm=w_mm, h_mm=h_mm)
     text_elements = extract_text_elements(page, (bx, by, bw, bh), matched_symbols)
+    editable_country_region = country_text_region(text_elements)
     n_matched = len(matched_symbols)
     log.info(f"  Result: {n_matched} matched, {len(failed_symbols)} skipped, "
              f"{n_components} components")
@@ -896,6 +913,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
         'symbols': matched_symbols,
         'text_region': text_region,
         'text_elements': text_elements,
+        'country_text_region': editable_country_region,
         'label_image': label_image_b64,
         'debug': {
             'render_dpi': RENDER_DPI,
@@ -1131,6 +1149,7 @@ def build_generation_response(lab, assets):
         "symbol_specifications": [s['specification'] for s in symbols if 'specification' in s],
         "text_region": sanitize(lab.get('text_region')),
         "text_elements": sanitize(lab.get('text_elements', [])),
+        "country_text_region": sanitize(lab.get('country_text_region')),
         "label_image": lab.get('label_image'),
         "symbol_images": sym_images,
         "symbols_placed": len(lab['symbols']),
