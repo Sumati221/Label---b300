@@ -91,6 +91,7 @@ _APP = Path(__file__).parent
 _SYMBOLS = _APP / "data" / "symbols"
 RENDER_DPI = 300  # DPI for PDF rasterization during matching
 MATCH_THRESHOLD = 0.15  # IoU-based scoring yields lower values than template correlation
+LABEL_EDGE_MARGIN_MM = 1.0  # Keep all placed symbols clear of the blank label border
 
 # Extracted from the controlled specification documents. These values are kept
 # with the app so label generation does not depend on a live AI/SQL request.
@@ -541,11 +542,17 @@ def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets,
                     norm_w = sym_w_mm / w_mm
                     norm_h = sym_h_mm / h_mm
 
-            # Center on component's centroid
+            # Center on the detected component, while preserving a 1 mm clear
+            # margin on every side of the blank label.
             cx = (comp['x'] + comp['w'] / 2) / bw
             cy = (comp['y'] + comp['h'] / 2) / bh
-            norm_x = max(0.0, cx - norm_w / 2)
-            norm_y = max(0.0, cy - norm_h / 2)
+            margin_x = LABEL_EDGE_MARGIN_MM / w_mm
+            margin_y = LABEL_EDGE_MARGIN_MM / h_mm
+            min_x, min_y = margin_x, margin_y
+            max_x = max(min_x, 1.0 - margin_x - norm_w)
+            max_y = max(min_y, 1.0 - margin_y - norm_h)
+            norm_x = min(max(min_x, cx - norm_w / 2), max_x)
+            norm_y = min(max(min_y, cy - norm_h / 2), max_y)
             matched.append({
                 'asset': asset['file'], 'code': asset['code'],
                 'x': round(norm_x, 4),
