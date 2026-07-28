@@ -20,6 +20,12 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .label-container{position:relative;border:2px solid #1a73e8;border-radius:4px;box-shadow:0 2px 12px rgba(0,0,0,.1);background:#fff}
 .label-container .template-base{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}
 .label-container img.symbol{position:absolute;pointer-events:none}
+.ai-editor-btn{position:absolute;right:6px;bottom:6px;z-index:20;border:0;border-radius:12px;background:#0d47a1;color:#fff;font-size:10px;font-weight:700;padding:5px 8px;cursor:pointer}
+.ai-add-text-btn{position:absolute;right:72px;bottom:6px;z-index:20;border:0;border-radius:12px;background:#fff;color:#0d47a1;border:1px solid #0d47a1;font-size:10px;font-weight:700;padding:4px 7px;cursor:pointer}
+.editor-item{position:absolute;z-index:10;resize:both;overflow:hidden;border:1px dashed #0d47a1;background:#fff}
+.editor-item img{width:100%;height:100%;object-fit:fill;display:block;pointer-events:none}
+.editor-text textarea{width:100%;height:100%;display:block;border:0;outline:0;resize:none;background:#fff;color:#111;font-family:Arial,sans-serif;line-height:1.05;padding:2px 2px 1px 11px}
+.drag-handle{position:absolute;z-index:12;top:0;left:0;width:11px;height:14px;border:0;background:#0d47a1;color:#fff;font-size:9px;line-height:12px;padding:0;cursor:move}
 .label-container .text-field{position:absolute;border:1px dashed #aaa;background:rgba(255,255,200,.3);font-size:inherit;padding:1px 2px;outline:none;overflow:hidden;resize:none}
 .label-container .text-field:focus{border-color:#1a73e8;background:rgba(200,230,255,.3)}
 .meta{font-size:11px;color:#666;margin-top:8px;text-align:center}
@@ -60,7 +66,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 </div>
 
 <script>
-let catalog=[], currentId='';
+let catalog=[], currentId='', lastRender=null, editorMode=false;
 
 async function loadCatalog(){
   try{
@@ -161,6 +167,7 @@ async function generate(){
         h+='</ul>';}
       h+='</div>';preview.innerHTML=h;addLog(data.error,true);return;}
     const countryText=await getCountryLabelText();
+    editorMode=false;
     const textWasPlaced=renderLabel(data,countryText);
     if(countryText&&!textWasPlaced) addLog('CDLM text was found, but this template has no detected editable text region. It was not placed automatically.',true);
     const notPresent=data.debug&&data.debug.failed_symbols?data.debug.failed_symbols.filter(f=>f.confidence===0).length:0;
@@ -169,6 +176,7 @@ async function generate(){
   finally{btn.disabled=false;btn.textContent='Generate Label'}
 }
 function renderLabel(data,countryText=''){
+  lastRender={data,countryText};
   const preview=document.getElementById('preview');
   const SCALE=3.5;
   const wPx=data.w_mm*SCALE;
@@ -177,13 +185,18 @@ function renderLabel(data,countryText=''){
   const hasTemplateArtwork=Boolean(data.label_image);
   if(hasTemplateArtwork){
     html+=`<img class="template-base" alt="Source label artwork" src="data:image/png;base64,${data.label_image}">`;
-  }else{
+  }
+  if(!hasTemplateArtwork||editorMode){
     (data.symbols||[]).forEach(sym=>{
       const imgData=(data.symbol_images||{})[sym.asset];
       if(!imgData)return;
       const x=(sym.x*100).toFixed(2),y=(sym.y*100).toFixed(2);
       const w=(sym.w*100).toFixed(2),h=(sym.h*100).toFixed(2);
-      html+=`<img class="symbol" src="data:image/png;base64,${imgData}" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%;filter:grayscale(100%)">`;
+      if(editorMode&&hasTemplateArtwork){
+        html+=`<div class="editor-item editor-symbol" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%"><button class="drag-handle" type="button" aria-label="Move symbol">↕</button><img alt="Editable symbol" src="data:image/png;base64,${imgData}"></div>`;
+      }else{
+        html+=`<img class="symbol" src="data:image/png;base64,${imgData}" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%;filter:grayscale(100%)">`;
+      }
     });
   }
   const tr=data.text_region;
@@ -194,10 +207,63 @@ function renderLabel(data,countryText=''){
     html+=`<textarea style="position:absolute;left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;border:1px solid #999;background:#fff;font-family:Arial;font-size:9px;padding:4px;outline:none;resize:none" placeholder="Product information">${escapeHtml(countryText)}</textarea>`;
     textWasPlaced=Boolean(countryText);
   }
+  if(editorMode&&hasTemplateArtwork){
+    (data.text_elements||[]).forEach((item,index)=>{
+      const x=(item.x*100).toFixed(2),y=(item.y*100).toFixed(2);
+      const w=(item.w*100).toFixed(2),h=Math.max(item.h*100,3).toFixed(2);
+      const font=Math.max(7,item.font_size*3.5).toFixed(1);
+      html+=`<div class="editor-item editor-text" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%;font-size:${font}px"><button class="drag-handle" type="button" aria-label="Move text">↕</button><textarea aria-label="Editable text ${index+1}">${escapeHtml(item.text)}</textarea></div>`;
+    });
+  }
+  if(hasTemplateArtwork){
+    if(editorMode) html+=`<button class="ai-add-text-btn" type="button" onclick="addTextBox()">+ Text</button>`;
+    html+=`<button class="ai-editor-btn" type="button" onclick="toggleEditor()">${editorMode?'Done':'AI editor'}</button>`;
+  }
   html+=`</div>`;
   html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
   preview.innerHTML=html;
+  if(editorMode) enableEditorDragging();
   return textWasPlaced;
+}
+function toggleEditor(){
+  if(!lastRender)return;
+  editorMode=!editorMode;
+  renderLabel(lastRender.data,lastRender.countryText);
+}
+function enableEditorDragging(){
+  document.querySelectorAll('.editor-item').forEach(item=>{
+    const handle=item.querySelector('.drag-handle');
+    if(!handle)return;
+    handle.addEventListener('pointerdown',event=>{
+      event.preventDefault();
+      const label=item.closest('.label-container');
+      const bounds=label.getBoundingClientRect();
+      const left=item.offsetLeft, top=item.offsetTop;
+      const startX=event.clientX, startY=event.clientY;
+      handle.setPointerCapture(event.pointerId);
+      const move=e=>{
+        const x=Math.max(0,Math.min(bounds.width-item.offsetWidth,left+e.clientX-startX));
+        const y=Math.max(0,Math.min(bounds.height-item.offsetHeight,top+e.clientY-startY));
+        item.style.left=`${(x/bounds.width*100).toFixed(2)}%`;
+        item.style.top=`${(y/bounds.height*100).toFixed(2)}%`;
+      };
+      const end=()=>{handle.removeEventListener('pointermove',move);handle.removeEventListener('pointerup',end);};
+      handle.addEventListener('pointermove',move);
+      handle.addEventListener('pointerup',end);
+    });
+  });
+}
+function addTextBox(){
+  const label=document.querySelector('.label-container');
+  if(!label)return;
+  const item=document.createElement('div');
+  item.className='editor-item editor-text';
+  item.style.cssText='left:35%;top:68%;width:42%;height:14%;font-size:10px';
+  item.innerHTML='<button class="drag-handle" type="button" aria-label="Move text">↕</button><textarea aria-label="Editable text" placeholder="Type label text"></textarea>';
+  const editorButton=label.querySelector('.ai-editor-btn');
+  label.insertBefore(item,editorButton);
+  enableEditorDragging();
+  item.querySelector('textarea').focus();
 }
 function addLog(msg,err=false,ok=false){
   const b=document.getElementById('logBox');

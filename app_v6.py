@@ -488,6 +488,42 @@ def extract_text_region(page, label_bounds_pt, matched_symbols):
     return {'x': float(x0), 'y': float(y0), 'w': float(x1 - x0), 'h': float(y1 - y0)}
 
 
+def extract_text_elements(page, label_bounds_px, matched_symbols):
+    """Return editable PDF text spans in normalized label coordinates."""
+    bx, by, bw, bh = label_bounds_px
+    scale = RENDER_DPI / 72
+    lx, ly, lw, lh = bx / scale, by / scale, bw / scale, bh / scale
+    elements = []
+
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                text = str(span.get("text", "")).strip()
+                sx0, sy0, sx1, sy1 = span.get("bbox", [0, 0, 0, 0])
+                if not text or sx1 <= lx or sx0 >= lx + lw or sy1 <= ly or sy0 >= ly + lh:
+                    continue
+                x = max(0.0, (sx0 - lx) / lw)
+                y = max(0.0, (sy0 - ly) / lh)
+                w = min(1.0 - x, (sx1 - sx0) / lw)
+                h = min(1.0 - y, (sy1 - sy0) / lh)
+                if w < 0.002 or h < 0.002:
+                    continue
+                # Symbol artwork contains its own small text; leave that with the symbol layer.
+                if any(x < s['x'] + s['w'] and x + w > s['x'] and
+                       y < s['y'] + s['h'] and y + h > s['y']
+                       for s in matched_symbols):
+                    continue
+                elements.append({
+                    'text': text,
+                    'x': round(x, 4), 'y': round(y, 4),
+                    'w': round(w, 4), 'h': round(h, 4),
+                    'font_size': round(float(span.get('size', 8)) * 25.4 / 72, 2),
+                })
+    return elements
+
+
 def build_text_mask(page, label_bounds_px, render_dpi):
     """Build binary mask of text regions inside the label crop."""
     bx, by, bw, bh = label_bounds_px
@@ -840,6 +876,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
     matched_symbols, failed_symbols, n_components, text_region = \
         component_match_pipeline(page, label_crop, (bx, by, bw, bh), symbol_assets,
                                  w_mm=w_mm, h_mm=h_mm)
+    text_elements = extract_text_elements(page, (bx, by, bw, bh), matched_symbols)
     n_matched = len(matched_symbols)
     log.info(f"  Result: {n_matched} matched, {len(failed_symbols)} skipped, "
              f"{n_components} components")
@@ -858,6 +895,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
         'w_mm': w_mm, 'h_mm': h_mm,
         'symbols': matched_symbols,
         'text_region': text_region,
+        'text_elements': text_elements,
         'label_image': label_image_b64,
         'debug': {
             'render_dpi': RENDER_DPI,
@@ -1092,6 +1130,7 @@ def build_generation_response(lab, assets):
         "symbols": sanitize(symbols),
         "symbol_specifications": [s['specification'] for s in symbols if 'specification' in s],
         "text_region": sanitize(lab.get('text_region')),
+        "text_elements": sanitize(lab.get('text_elements', [])),
         "label_image": lab.get('label_image'),
         "symbol_images": sym_images,
         "symbols_placed": len(lab['symbols']),
