@@ -27,6 +27,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .ai-panel.hidden,.ai-fab.hidden{display:none}.ai-head{display:flex;justify-content:space-between;align-items:center;background:#0d47a1;color:#fff;padding:10px 12px;font-size:12px;font-weight:700}.ai-head button{border:0;background:transparent;color:#fff;font-size:18px;cursor:pointer}.ai-body{padding:10px}.ai-help{font-size:11px;color:#555;line-height:1.4;background:#f4f7fb;padding:8px;border-radius:6px}.ai-history{font-size:11px;line-height:1.35;max-height:120px;overflow:auto;margin:8px 0}.ai-input{display:flex;gap:6px}.ai-input input{min-width:0;flex:1;padding:8px;border:1px solid #9db6d8;border-radius:6px}.ai-input button{border:0;border-radius:6px;background:#0d47a1;color:#fff;font-weight:700;padding:8px 11px;cursor:pointer}
 .label-container .text-field{position:absolute;border:0;background:#fff;color:#222;font-family:Arial,sans-serif;line-height:1.12;padding:1px 2px;outline:none;overflow:hidden;resize:none}
 .label-container .text-field:focus{border-color:#1a73e8;background:rgba(200,230,255,.3)}
+.label-container .country-text-field{border:1px dashed #1a73e8;background:rgba(235,244,255,.96);box-shadow:0 0 0 1px rgba(26,115,232,.12)}
 .meta{font-size:11px;color:#666;margin-top:8px;text-align:center}
 .log{margin-top:12px;background:#f5f5f7;border-radius:6px;padding:6px;font-size:9px;font-family:monospace;max-height:140px;overflow-y:auto;line-height:1.6;color:#555}
 .toggle{display:flex;align-items:center;gap:6px;margin:8px 0;font-size:11px}
@@ -213,7 +214,9 @@ function renderLabel(data,countryText=''){
     const tw=(text.w*100).toFixed(2),th=(text.h*100).toFixed(2);
     const fontMm=Number(text.font_size||2.8);
     const fontPx=Math.max(7,Math.min(22,fontMm*SCALE));
-    html+=`<textarea class="text-field" aria-label="Editable label text" data-text-index="${index}" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateLabelText(${index},this.value)">${escapeHtml(text.text)}</textarea>`;
+    const fieldClass=text.id==='country-text'?'text-field country-text-field':'text-field';
+    const label=text.id==='country-text'?'Editable country-specific label text':'Editable label text';
+    html+=`<textarea class="${fieldClass}" aria-label="${label}" title="${label}" data-text-index="${index}" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateLabelText(${index},this.value)">${escapeHtml(text.text)}</textarea>`;
   });
   (data.symbols||[]).filter(sym=>sym._edited).forEach(sym=>{
     const imgData=(data.symbol_images||{})[sym.asset];
@@ -245,6 +248,12 @@ function findEditableText(target){
   if(!needle)return null;
   return (lastRender.data._editableText||[]).find(item=>String(item.text||'').toLowerCase().includes(needle));
 }
+function countryTextField(){
+  return (lastRender?.data?._editableText||[]).find(item=>item.id==='country-text')||null;
+}
+function isGenericTextTarget(target){
+  return ['text','the text','label text','country text','country-specific text','country specific text'].includes(String(target||'').trim().toLowerCase());
+}
 async function sendAiCommand(){
   const input=document.getElementById('aiCommand'),command=input.value.trim();
   if(!command)return;input.value='';
@@ -257,10 +266,11 @@ async function sendAiCommand(){
     const edit=reply.proposal||{};
     const operation=String(edit.operation||'').toLowerCase().replace(/\s+/g,'_');
     if(operation.includes('replace')){
-      const field=findEditableText(edit.target);
-      if(!field){aiMessage(`I found the requested text change, but could not locate “${edit.target}” on this label.`,true);return;}
+      const target=String(edit.target||'');
+      const field=isGenericTextTarget(target)?countryTextField():(findEditableText(target)||countryTextField());
+      if(!field){aiMessage('Select a Country label text and CDLM product first; this creates the editable country-specific text box on the preview.',true);return;}
       field.text=String(edit.replacement_text||'');renderLabel(lastRender.data,lastRender.countryText);
-      aiMessage('Applied the proposed text replacement. Please review it before using the label.');return;
+      aiMessage('Updated the editable country-specific text box. Please review it before using the label.');return;
     }
     const symbol=findPromptSymbol(edit.target||'');
     if(!symbol){aiMessage(`I understood “${edit.target||'this item'}”, but could not locate that symbol.`,true);return;}
