@@ -20,13 +20,11 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .label-container{position:relative;border:2px solid #1a73e8;border-radius:4px;box-shadow:0 2px 12px rgba(0,0,0,.1);background:#fff}
 .label-container .template-base{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}
 .label-container img.symbol{position:absolute;pointer-events:none}
-.editor-toolbar{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:10px}
-.ai-editor-btn{border-radius:12px;font-size:11px;font-weight:700;padding:6px 10px;cursor:pointer}
-.ai-editor-btn{border:0;background:#0d47a1;color:#fff}
-.editor-item{position:absolute;z-index:10;resize:both;overflow:hidden;border:1px dashed #0d47a1;background:#fff}
-.editor-item img{width:100%;height:100%;object-fit:fill;display:block;pointer-events:none}
-.editor-text textarea{width:100%;height:100%;display:block;border:0;outline:0;resize:none;background:#fff;color:#111;font-family:Arial,sans-serif;line-height:1.05;padding:2px 2px 1px 11px}
-.drag-handle{position:absolute;z-index:12;top:0;left:0;width:11px;height:14px;border:0;background:#0d47a1;color:#fff;font-size:9px;line-height:12px;padding:0;cursor:move}
+.edited-symbol{position:absolute;z-index:5;background:#fff;pointer-events:none}
+.edited-symbol img{width:100%;height:100%;object-fit:fill;display:block}
+.ai-fab{position:fixed;right:22px;bottom:20px;z-index:30;border:0;border-radius:18px;background:#0d47a1;color:#fff;font-size:12px;font-weight:700;padding:10px 16px;box-shadow:0 3px 12px rgba(0,0,0,.2);cursor:pointer}
+.ai-panel{position:fixed;right:22px;bottom:20px;z-index:31;width:320px;background:#fff;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.22);overflow:hidden}
+.ai-panel.hidden,.ai-fab.hidden{display:none}.ai-head{display:flex;justify-content:space-between;align-items:center;background:#0d47a1;color:#fff;padding:10px 12px;font-size:12px;font-weight:700}.ai-head button{border:0;background:transparent;color:#fff;font-size:18px;cursor:pointer}.ai-body{padding:10px}.ai-help{font-size:11px;color:#555;line-height:1.4;background:#f4f7fb;padding:8px;border-radius:6px}.ai-history{font-size:11px;line-height:1.35;max-height:120px;overflow:auto;margin:8px 0}.ai-input{display:flex;gap:6px}.ai-input input{min-width:0;flex:1;padding:8px;border:1px solid #9db6d8;border-radius:6px}.ai-input button{border:0;border-radius:6px;background:#0d47a1;color:#fff;font-weight:700;padding:8px 11px;cursor:pointer}
 .label-container .text-field{position:absolute;border:1px dashed #aaa;background:rgba(255,255,200,.3);font-size:inherit;padding:1px 2px;outline:none;overflow:hidden;resize:none}
 .label-container .text-field:focus{border-color:#1a73e8;background:rgba(200,230,255,.3)}
 .meta{font-size:11px;color:#666;margin-top:8px;text-align:center}
@@ -65,9 +63,18 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
   <p style="color:#888;margin-top:40px">Select a label and click Generate</p>
 </div>
 </div>
+<button id="aiFab" class="ai-fab" type="button" onclick="openAiEditor()">✨ AI Editor</button>
+<div id="aiPanel" class="ai-panel hidden">
+  <div class="ai-head">✨ AI Label Editor <button type="button" onclick="closeAiEditor()">×</button></div>
+  <div class="ai-body">
+    <div class="ai-help">After generating a label, try: <br>• “increase INMETRO size by 20%”<br>• “move 100183 right 2 mm”<br>• “set 100025 width to 20 mm”</div>
+    <div id="aiHistory" class="ai-history"></div>
+    <div class="ai-input"><input id="aiCommand" placeholder="Describe an edit…" onkeydown="if(event.key==='Enter')sendAiCommand()"><button type="button" onclick="sendAiCommand()">Send</button></div>
+  </div>
+</div>
 
 <script>
-let catalog=[], currentId='', lastRender=null, editorMode=false;
+let catalog=[], currentId='', lastRender=null;
 
 async function loadCatalog(){
   try{
@@ -168,7 +175,6 @@ async function generate(){
         h+='</ul>';}
       h+='</div>';preview.innerHTML=h;addLog(data.error,true);return;}
     const countryText=await getCountryLabelText();
-    editorMode=false;
     const textWasPlaced=renderLabel(data,countryText);
     if(countryText&&!textWasPlaced) addLog('CDLM text was found, but this template has no detected editable text region. It was not placed automatically.',true);
     const notPresent=data.debug&&data.debug.failed_symbols?data.debug.failed_symbols.filter(f=>f.confidence===0).length:0;
@@ -204,51 +210,38 @@ function renderLabel(data,countryText=''){
     html+=`<textarea style="position:absolute;left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;border:1px solid #999;background:#fff;font-family:Arial;font-size:9px;padding:4px;outline:none;resize:none" placeholder="Product information">${escapeHtml(countryText)}</textarea>`;
     textWasPlaced=Boolean(countryText);
   }
-  if(editorMode&&hasTemplateArtwork&&data.country_text_region){
-    const area=data.country_text_region;
-    const x=(area.x*100).toFixed(2),y=(area.y*100).toFixed(2);
-    const w=(area.w*100).toFixed(2),h=Math.max(area.h*100,8).toFixed(2);
-    const font=Math.max(8,area.font_size*3.5).toFixed(1);
-    const value=countryText||area.text;
-    html+=`<div class="editor-item editor-text" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%;font-size:${font}px"><button class="drag-handle" type="button" aria-label="Move country information">↕</button><textarea aria-label="Editable country information">${escapeHtml(value)}</textarea></div>`;
-  }
+  (data.symbols||[]).filter(sym=>sym._edited).forEach(sym=>{
+    const imgData=(data.symbol_images||{})[sym.asset];
+    if(!imgData)return;
+    html+=`<div class="edited-symbol" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Edited symbol" src="data:image/png;base64,${imgData}"></div>`;
+  });
   html+=`</div>`;
   html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
-  if(hasTemplateArtwork){
-    html+=`<div class="editor-toolbar">`;
-    html+=`<button class="ai-editor-btn" type="button" onclick="toggleEditor()">${editorMode?'Done':'AI editor'}</button></div>`;
-  }
   preview.innerHTML=html;
-  if(editorMode) enableEditorDragging();
   return textWasPlaced;
 }
-function toggleEditor(){
-  if(!lastRender)return;
-  editorMode=!editorMode;
-  renderLabel(lastRender.data,lastRender.countryText);
-}
-function enableEditorDragging(){
-  document.querySelectorAll('.editor-item').forEach(item=>{
-    const handle=item.querySelector('.drag-handle');
-    if(!handle)return;
-    handle.addEventListener('pointerdown',event=>{
-      event.preventDefault();
-      const label=item.closest('.label-container');
-      const bounds=label.getBoundingClientRect();
-      const left=item.offsetLeft, top=item.offsetTop;
-      const startX=event.clientX, startY=event.clientY;
-      handle.setPointerCapture(event.pointerId);
-      const move=e=>{
-        const x=Math.max(0,Math.min(bounds.width-item.offsetWidth,left+e.clientX-startX));
-        const y=Math.max(0,Math.min(bounds.height-item.offsetHeight,top+e.clientY-startY));
-        item.style.left=`${(x/bounds.width*100).toFixed(2)}%`;
-        item.style.top=`${(y/bounds.height*100).toFixed(2)}%`;
-      };
-      const end=()=>{handle.removeEventListener('pointermove',move);handle.removeEventListener('pointerup',end);};
-      handle.addEventListener('pointermove',move);
-      handle.addEventListener('pointerup',end);
-    });
+function openAiEditor(){document.getElementById('aiPanel').classList.remove('hidden');document.getElementById('aiFab').classList.add('hidden');}
+function closeAiEditor(){document.getElementById('aiPanel').classList.add('hidden');document.getElementById('aiFab').classList.remove('hidden');}
+function aiMessage(message,error=false){const row=document.createElement('div');row.style.color=error?'#b3261e':'#174ea6';row.textContent=message;document.getElementById('aiHistory').appendChild(row);}
+function findPromptSymbol(target){
+  if(!lastRender)return null;
+  const needle=target.toLowerCase().replace(/[^a-z0-9]/g,'');
+  return (lastRender.data.symbols||[]).find(sym=>{
+    const spec=sym.specification||{};
+    return String(sym.code||'').toLowerCase().includes(needle)||String(sym.asset||'').toLowerCase().replace(/[^a-z0-9]/g,'').includes(needle)||String(spec.symbol_name||'').toLowerCase().replace(/[^a-z0-9]/g,'').includes(needle);
   });
+}
+function sendAiCommand(){
+  const input=document.getElementById('aiCommand'),command=input.value.trim();
+  if(!command)return;input.value='';
+  if(!lastRender){aiMessage('Generate a label before editing.',true);return;}
+  let match=command.match(/\b(increase|decrease)\b.*?(?:size of\s+)?(.+?)\s+by\s+(\d+(?:\.\d+)?)\s*%/i);
+  if(match){const symbol=findPromptSymbol(match[2]);if(!symbol){aiMessage('I could not identify that symbol.',true);return;}const factor=match[1].toLowerCase()==='increase'?1+Number(match[3])/100:1-Number(match[3])/100;symbol.w*=factor;symbol.h*=factor;symbol._edited=true;renderLabel(lastRender.data,lastRender.countryText);aiMessage(`Updated ${symbol.code||symbol.asset}.`);return;}
+  match=command.match(/\bmove\s+(.+?)\s+(left|right|up|down)\s+(\d+(?:\.\d+)?)\s*mm/i);
+  if(match){const symbol=findPromptSymbol(match[1]);if(!symbol){aiMessage('I could not identify that symbol.',true);return;}const amount=Number(match[3]);if(match[2]==='left')symbol.x-=amount/lastRender.data.w_mm;if(match[2]==='right')symbol.x+=amount/lastRender.data.w_mm;if(match[2]==='up')symbol.y-=amount/lastRender.data.h_mm;if(match[2]==='down')symbol.y+=amount/lastRender.data.h_mm;symbol.x=Math.max(0,Math.min(1-symbol.w,symbol.x));symbol.y=Math.max(0,Math.min(1-symbol.h,symbol.y));symbol._edited=true;renderLabel(lastRender.data,lastRender.countryText);aiMessage(`Moved ${symbol.code||symbol.asset}.`);return;}
+  match=command.match(/\bset\s+(.+?)\s+(?:width|size)\s+to\s+(\d+(?:\.\d+)?)\s*mm/i);
+  if(match){const symbol=findPromptSymbol(match[1]);if(!symbol){aiMessage('I could not identify that symbol.',true);return;}const width=Number(match[2]);const ratio=symbol.h/symbol.w;symbol.w=width/lastRender.data.w_mm;symbol.h=symbol.w*ratio;symbol._edited=true;renderLabel(lastRender.data,lastRender.countryText);aiMessage(`Set ${symbol.code||symbol.asset} width to ${width} mm.`);return;}
+  aiMessage('Try “increase INMETRO size by 20%”, “move 100183 right 2 mm”, or “set 100025 width to 20 mm”.',true);
 }
 function addLog(msg,err=false,ok=false){
   const b=document.getElementById('logBox');
