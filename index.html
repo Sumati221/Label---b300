@@ -185,7 +185,7 @@ function renderLabel(data,countryText=''){
   }
   // The reference PDF supplies the controlled layout.  Cover each reference
   // symbol and repaint it with the approved symbol asset at the same position.
-  (data.symbols||[]).slice().sort((a,b)=>a.y-b.y||a.x-b.x).forEach(sym=>{
+  (data.symbols||[]).filter(sym=>sym.specification).slice().sort((a,b)=>a.y-b.y||a.x-b.x).forEach(sym=>{
     const imgData=(data.symbol_images||{})[sym.asset];
     if(!imgData)return;
     html+=`<div class="controlled-symbol" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Controlled symbol ${escapeHtml(sym.code||'')}" src="data:image/png;base64,${imgData}"></div>`;
