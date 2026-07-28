@@ -14,6 +14,7 @@ import io
 import base64
 import logging
 import time
+import tempfile
 from pathlib import Path
 from typing import List, Dict, Optional
 
@@ -44,7 +45,7 @@ try:
 except (ImportError, OSError):
     HAS_CAIRO = False
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response, JSONResponse
 import json
 
@@ -98,6 +99,7 @@ _SYMBOLS = _APP / "data" / "symbols"
 RENDER_DPI = 300  # DPI for PDF rasterization during matching
 MATCH_THRESHOLD = 0.15  # IoU-based scoring yields lower values than template correlation
 LABEL_EDGE_MARGIN_MM = 1.0  # Keep all placed symbols clear of the blank label border
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # Uploads are processed temporarily, never retained.
 
 # Extracted from the controlled specification documents. These values are kept
 # with the app so label generation does not depend on a live AI/SQL request.
@@ -1056,6 +1058,40 @@ async def api_symbol_specification(symbol_id: str):
     return specification
 
 
+def build_generation_response(lab, assets):
+    """Build the shared API payload for a stored or temporarily uploaded PDF."""
+    if lab.get('error'):
+        return JSONResponse(content={
+            "error": lab['error'],
+            "label_id": lab['id'],
+            "failed_symbols": sanitize(lab.get('failed_symbols', [])),
+            "matched_symbols": sanitize(lab.get('symbols', [])),
+            "debug": sanitize(lab.get('debug', {}))
+        }, status_code=422)
+
+    sym_images = {}
+    for sym in lab['symbols']:
+        asset = next((a for a in assets if a['file'] == sym['asset']), None)
+        if asset and asset.get('image_b64'):
+            sym_images[sym['asset']] = asset['image_b64']
+
+    symbols = attach_symbol_specifications(lab['symbols'])
+    return JSONResponse(content={
+        "label_id": lab['id'],
+        "title": lab['title'],
+        "label_size": f"{lab['h_mm']} X {lab['w_mm']} mm",
+        "w_mm": int(lab['w_mm']),
+        "h_mm": int(lab['h_mm']),
+        "symbols": sanitize(symbols),
+        "symbol_specifications": [s['specification'] for s in symbols if 'specification' in s],
+        "text_region": sanitize(lab.get('text_region')),
+        "symbol_images": sym_images,
+        "symbols_placed": len(lab['symbols']),
+        "convention": "template-matched",
+        "debug": sanitize(lab.get('debug', {}))
+    })
+
+
 @app.get("/api/generate/{label_id}")
 async def api_generate(label_id: str, dpi: int = 600):
     """Generate label: returns normalized symbol positions + base64 images."""
@@ -1066,42 +1102,57 @@ async def api_generate(label_id: str, dpi: int = 600):
             avail = [l['id'] for l in c['labels']]
             return JSONResponse(content={"error": f"Not found: {label_id}", "available": avail}, status_code=404)
 
-        # Check if label processing returned an error
-        if lab.get('error'):
-            return JSONResponse(content={
-                "error": lab['error'],
-                "label_id": lab['id'],
-                "failed_symbols": sanitize(lab.get('failed_symbols', [])),
-                "matched_symbols": sanitize(lab.get('symbols', [])),
-                "debug": sanitize(lab.get('debug', {}))
-            }, status_code=422)
-
-        # Use pre-encoded base64 (no numpy conversion at request time)
-        sym_images = {}
-        for sym in lab['symbols']:
-            asset = next((a for a in c['assets'] if a['file'] == sym['asset']), None)
-            if asset and asset.get('image_b64'):
-                sym_images[sym['asset']] = asset['image_b64']
-
-        symbols = attach_symbol_specifications(lab['symbols'])
-        result = {
-            "label_id": lab['id'],
-            "title": lab['title'],
-            "label_size": f"{lab['h_mm']} X {lab['w_mm']} mm",
-            "w_mm": int(lab['w_mm']),
-            "h_mm": int(lab['h_mm']),
-            "symbols": sanitize(symbols),
-            "symbol_specifications": [s['specification'] for s in symbols if 'specification' in s],
-            "text_region": sanitize(lab.get('text_region')),
-            "symbol_images": sym_images,
-            "symbols_placed": len(lab['symbols']),
-            "convention": "template-matched",
-            "debug": sanitize(lab.get('debug', {}))
-        }
-        return JSONResponse(content=result)
+        return build_generation_response(lab, c['assets'])
     except Exception as e:
         log.error(f"Generate error for {label_id}: {e}", exc_info=True)
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@app.post("/api/generate-upload")
+async def api_generate_upload(file: UploadFile = File(...), dpi: int = 600):
+    """Process one user-uploaded PDF from temporary storage, then delete it."""
+    filename = Path(file.filename or "uploaded-label.pdf").name
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "Please upload a PDF file.")
+
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="label-upload-", suffix=".pdf", delete=False) as tmp:
+            temp_path = tmp.name
+            total_bytes = 0
+            while chunk := await file.read(1024 * 1024):
+                total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, "PDF exceeds the 25 MB upload limit.")
+                tmp.write(chunk)
+
+        with open(temp_path, "rb") as uploaded:
+            if uploaded.read(5) != b"%PDF-":
+                raise HTTPException(400, "The uploaded file is not a valid PDF.")
+
+        assets = scan_symbol_assets()
+        lab = process_pdf_label(temp_path, assets)
+        if not lab:
+            return JSONResponse(content={
+                "error": "No usable label boundary or content was found in this PDF."
+            }, status_code=422)
+
+        # Keep the original drawing name in the response; the temporary path is never exposed.
+        lab['id'] = Path(filename).stem
+        lab['title'] = Path(filename).stem
+        return build_generation_response(lab, assets)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"Generate error for uploaded PDF {filename}: {e}", exc_info=True)
+        return JSONResponse(content={"error": "Unable to process this PDF."}, status_code=422)
+    finally:
+        await file.close()
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
 
 
 @app.get("/api/generate/{label_id}/image")

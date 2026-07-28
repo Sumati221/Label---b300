@@ -10,7 +10,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .main{flex:1;display:grid;grid-template-columns:320px 1fr;overflow:hidden}
 .panel{background:#fff;border-right:1px solid #ddd;padding:16px;overflow-y:auto}
 .panel h2{font-size:12px;font-weight:700;margin:14px 0 6px;color:#0d47a1}
-.panel select{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px}
+.panel select,.panel input[type="file"]{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px}
 .info{background:#e3f2fd;border-radius:6px;padding:10px;font-size:11px;margin:10px 0;line-height:1.7}
 .info b{color:#0d47a1}
 .btn{width:100%;padding:12px;background:#0d47a1;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;margin-top:12px}
@@ -35,6 +35,9 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 <div class="panel">
 <h2>1. Select Label PDF</h2>
 <select id="sel" onchange="onSelect()"><option value="">Loading...</option></select>
+<label for="pdfUpload" style="display:block;margin-top:10px;font-size:11px;font-weight:600">Or upload a PDF</label>
+<input id="pdfUpload" type="file" accept="application/pdf,.pdf" onchange="onUploadChange()">
+<div style="font-size:10px;color:#666;margin-top:4px">Processed temporarily; not saved to a Databricks Volume.</div>
 
 <div class="info" id="info"><b>Status:</b> Select a label</div>
 
@@ -109,6 +112,7 @@ function escapeHtml(value){
 
 function onSelect(){
   currentId=document.getElementById('sel').value;
+  if(currentId) document.getElementById('pdfUpload').value='';
   document.getElementById('genBtn').disabled=!currentId;
   if(currentId){
     const p=catalog.find(x=>x.sheet_name===currentId);
@@ -117,15 +121,33 @@ function onSelect(){
   }
 }
 
+function onUploadChange(){
+  const file=document.getElementById('pdfUpload').files[0];
+  if(!file)return;
+  currentId='';
+  document.getElementById('sel').value='';
+  document.getElementById('genBtn').disabled=false;
+  document.getElementById('info').innerHTML=
+    `<b>Uploaded:</b> ${escapeHtml(file.name)}<br><b>Size:</b> ${(file.size/1024/1024).toFixed(1)} MB<br><b>Storage:</b> Temporary for this generation only`;
+}
+
 async function generate(){
-  if(!currentId)return;
+  const file=document.getElementById('pdfUpload').files[0];
+  if(!currentId&&!file)return;
   const btn=document.getElementById('genBtn');
   btn.disabled=true; btn.textContent='Detecting...';
   addLog('Running template matching...');
   const dpi=document.getElementById('dpi').value;
 
   try{
-    const r=await fetch(`/api/generate/${encodeURIComponent(currentId)}?dpi=${dpi}`);
+    let r;
+    if(file){
+      const form=new FormData();
+      form.append('file',file);
+      r=await fetch(`/api/generate-upload?dpi=${dpi}`,{method:'POST',body:form});
+    }else{
+      r=await fetch(`/api/generate/${encodeURIComponent(currentId)}?dpi=${dpi}`);
+    }
     const data=await r.json();
     if(data.error){
       const preview=document.getElementById('preview');

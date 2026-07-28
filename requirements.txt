@@ -5,3 +5,4 @@ Pillow
 PyMuPDF
 opencv-python-headless
 openpyxl
+python-multipart
