@@ -91,6 +91,7 @@ _APP = Path(__file__).parent
 _SYMBOLS = _APP / "data" / "symbols"
 RENDER_DPI = 300  # DPI for PDF rasterization during matching
 MATCH_THRESHOLD = 0.15  # IoU-based scoring yields lower values than template correlation
+SYMBOL_SIZE_MM = 5  # Largest symbol dimension; preserve aspect ratio when rendering
 
 _cache = None
 _cache_t = 0
