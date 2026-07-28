@@ -39,6 +39,10 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 <div class="info" id="info"><b>Status:</b> Select a label</div>
 
 <h2>2. Settings</h2>
+<label for="country">Country label text</label>
+<select id="country"><option value="">-- Select country (optional) --</option></select>
+<label for="product">CDLM product</label>
+<select id="product"><option value="">-- Select product (optional) --</option></select>
 <select id="dpi"><option value="300">300 DPI</option><option value="600" selected>600 DPI</option></select>
 
 <button class="btn" id="genBtn" onclick="generate()" disabled>Generate Label</button>
@@ -68,7 +72,39 @@ async function loadCatalog(){
       s.appendChild(o);
     });
     if(!catalog.length) s.innerHTML='<option>No labels found</option>';
+    loadCountryLabelOptions();
   }catch(e){addLog('Catalog error: '+e.message,true)}
+}
+
+async function loadCountryLabelOptions(){
+  try{
+    const r=await fetch('/api/country-labels');
+    const data=await r.json();
+    if(data.error) throw new Error(data.error);
+    const country=document.getElementById('country');
+    const product=document.getElementById('product');
+    (data.countries||[]).forEach(value=>country.add(new Option(value,value)));
+    (data.products||[]).forEach(value=>product.add(new Option(value,value)));
+  }catch(e){addLog('Country label data unavailable: '+e.message,true)}
+}
+
+async function getCountryLabelText(){
+  const country=document.getElementById('country').value;
+  const product=document.getElementById('product').value;
+  if(!country||!product)return '';
+  const r=await fetch(`/api/country-labels?country=${encodeURIComponent(country)}&product=${encodeURIComponent(product)}`);
+  const data=await r.json();
+  if(data.error)throw new Error(data.error);
+  const printable=(data.entries||[]).filter(entry=>!entry.is_reference);
+  const references=(data.entries||[]).filter(entry=>entry.is_reference);
+  if(references.length) addLog(`CDLM references ${references.map(entry=>entry.text).join(', ')}; no unverified reference text was inserted.`,false);
+  return printable.map(entry=>entry.text).join('\n\n');
+}
+
+function escapeHtml(value){
+  return String(value).replace(/[&<>'"]/g, char=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'
+  }[char]));
 }
 
 function onSelect(){
@@ -101,13 +137,15 @@ async function generate(){
         data.failed_symbols.forEach(f=>{h+=`<li><b>${f.asset}</b>: ${f.reason} (conf:${(f.confidence||0).toFixed(3)})</li>`;});
         h+='</ul>';}
       h+='</div>';preview.innerHTML=h;addLog(data.error,true);return;}
-    renderLabel(data);
+    const countryText=await getCountryLabelText();
+    const textWasPlaced=renderLabel(data,countryText);
+    if(countryText&&!textWasPlaced) addLog('CDLM text was found, but this template has no detected editable text region. It was not placed automatically.',true);
     const notPresent=data.debug&&data.debug.failed_symbols?data.debug.failed_symbols.filter(f=>f.confidence===0).length:0;
     addLog(`Matched ${data.symbols_placed} symbol(s); ${notPresent} asset(s) not in this label.`,false,true);
   }catch(e){addLog(e.message,true)}
   finally{btn.disabled=false;btn.textContent='Generate Label'}
 }
-function renderLabel(data){
+function renderLabel(data,countryText=''){
   const preview=document.getElementById('preview');
   const SCALE=3.5;
   const wPx=data.w_mm*SCALE;
@@ -121,14 +159,17 @@ function renderLabel(data){
     html+=`<img class="symbol" src="data:image/png;base64,${imgData}" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%;filter:grayscale(100%)">`;
   });
   const tr=data.text_region;
+  let textWasPlaced=false;
   if(tr){
     const tx=(tr.x*100).toFixed(2),ty=(tr.y*100).toFixed(2);
     const tw=(tr.w*100).toFixed(2),th=(tr.h*100).toFixed(2);
-    html+=`<textarea style="position:absolute;left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;border:1px solid #999;background:#fff;font-family:Arial;font-size:9px;padding:4px;outline:none;resize:none" placeholder="Product information"></textarea>`;
+    html+=`<textarea style="position:absolute;left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;border:1px solid #999;background:#fff;font-family:Arial;font-size:9px;padding:4px;outline:none;resize:none" placeholder="Product information">${escapeHtml(countryText)}</textarea>`;
+    textWasPlaced=Boolean(countryText);
   }
   html+=`</div>`;
   html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
   preview.innerHTML=html;
+  return textWasPlaced;
 }
 function addLog(msg,err=false,ok=false){
   const b=document.getElementById('logBox');

@@ -21,6 +21,12 @@ import numpy as np
 from PIL import Image
 
 try:
+    from openpyxl import load_workbook
+    HAS_OPENPYXL = True
+except ImportError:
+    HAS_OPENPYXL = False
+
+try:
     import fitz  # PyMuPDF
     HAS_FITZ = True
 except ImportError:
@@ -124,6 +130,7 @@ SYMBOL_SPECIFICATIONS = {
 
 _cache = None
 _cache_t = 0
+_cdlm_cache = None
 
 
 # ════════════════════════════════════════════════════════════
@@ -218,6 +225,72 @@ def attach_symbol_specifications(symbols: List[Dict]) -> List[Dict]:
             item["specification"] = specification
         enriched.append(item)
     return enriched
+
+
+def load_country_label_matrix() -> Dict:
+    """Read country/product label text from the bundled CDLM workbook.
+
+    The workbook identifies product applicability with an ``x`` in a product
+    column.  Only the literal Text-column value is returned; values beginning
+    with ``see`` are document references, not printable label text.
+    """
+    global _cdlm_cache
+    if _cdlm_cache is not None:
+        return _cdlm_cache
+
+    empty = {"countries": [], "products": [], "entries": [], "error": None}
+    if not HAS_OPENPYXL:
+        empty["error"] = "The CDLM reader dependency is unavailable."
+        _cdlm_cache = empty
+        return _cdlm_cache
+
+    files = sorted(_SYMBOLS.glob("LS-200004_CDLM_Avalon_Family_RevP*.xlsx"))
+    if not files:
+        empty["error"] = "No CDLM workbook was found in data/symbols."
+        _cdlm_cache = empty
+        return _cdlm_cache
+
+    # Prefer the canonical filename if both a duplicate and original are present.
+    source = next((f for f in files if " (" not in f.name), files[0])
+    try:
+        workbook = load_workbook(source, read_only=True, data_only=True)
+        worksheet = workbook["Country Label"]
+        product_columns = {
+            column: str(worksheet.cell(2, column).value).strip()
+            for column in range(11, worksheet.max_column + 1)
+            if worksheet.cell(2, column).value
+        }
+        entries = []
+        for row_number, row in enumerate(worksheet.iter_rows(min_row=3, values_only=True), start=3):
+            country = str(row[3]).strip() if len(row) > 3 and row[3] else ""
+            text = str(row[8]).strip() if len(row) > 8 and row[8] else ""
+            location = str(row[9]).strip() if len(row) > 9 and row[9] else ""
+            if not country or not text:
+                continue
+            for column, product in product_columns.items():
+                cell = row[column - 1] if len(row) >= column else None
+                if str(cell).strip().lower() != "x":
+                    continue
+                entries.append({
+                    "country": country,
+                    "product": product,
+                    "text": text,
+                    "location": location,
+                    "is_reference": text.lower().startswith("see "),
+                    "source_row": row_number,
+                })
+        workbook.close()
+        _cdlm_cache = {
+            "countries": sorted({entry["country"] for entry in entries}),
+            "products": sorted(product_columns.values()),
+            "entries": entries,
+            "error": None,
+        }
+    except Exception as error:
+        log.error(f"CDLM read error: {error}", exc_info=True)
+        empty["error"] = "Unable to read the CDLM workbook."
+        _cdlm_cache = empty
+    return _cdlm_cache
 
 
 def scan_symbol_assets():
@@ -954,6 +1027,24 @@ async def api_catalog():
         } for lab in c['labels']],
         "count": len(c['labels'])
     }
+
+
+@app.get("/api/country-labels")
+async def api_country_labels(country: Optional[str] = None, product: Optional[str] = None):
+    """Expose CDLM options and safe product-label text for the selected pair."""
+    matrix = load_country_label_matrix()
+    if matrix["error"]:
+        return JSONResponse(content={"error": matrix["error"]}, status_code=503)
+
+    response = {"countries": matrix["countries"], "products": matrix["products"]}
+    if country and product:
+        response["entries"] = [
+            entry for entry in matrix["entries"]
+            if entry["country"] == country
+            and entry["product"] == product
+            and "product label" in entry["location"].lower()
+        ]
+    return response
 
 
 @app.get("/api/symbols/{symbol_id}")
