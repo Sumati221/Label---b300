@@ -93,6 +93,35 @@ RENDER_DPI = 300  # DPI for PDF rasterization during matching
 MATCH_THRESHOLD = 0.15  # IoU-based scoring yields lower values than template correlation
 SYMBOL_SIZE_MM = 5  # Largest symbol dimension; preserve aspect ratio when rendering
 
+# Extracted from the controlled specification documents. These values are kept
+# with the app so label generation does not depend on a live AI/SQL request.
+SYMBOL_SPECIFICATIONS = {
+    "100025": {
+        "symbol_id": "100025",
+        "symbol_name": "INMETRO Brazilian National Institute of Metrology symbol",
+        "reference": "INMETRO Ordinance 54/2016",
+        "required_width_mm": 20.0,
+        "minimum_size_mm": None,
+        "size_specification": "Width 20 mm.",
+        "applicable_for": "Product",
+        "color_specification": None,
+        "usage_notes": "Required symbol; no required combination with other symbols.",
+        "source_document": "LS_100025_SPEC.docx",
+    },
+    "100183": {
+        "symbol_id": "100183",
+        "symbol_name": "Thai FDA logo",
+        "reference": "Thailand Ministry of Public Health, Volume 137, Special Section 260, November 5, 2020",
+        "required_width_mm": None,
+        "minimum_size_mm": 5.0,
+        "size_specification": "Minimum size 5 mm; text within the symbol must remain legible.",
+        "applicable_for": "Product and packaging of medical devices sold in Thailand",
+        "color_specification": "Not specified internally or by regulation.",
+        "usage_notes": "Must contain the license number, detailed notification number, or notification receipt number in Arabic numerals within the Thai FDA logo frame.",
+        "source_document": "LS-100183.docx",
+    },
+}
+
 _cache = None
 _cache_t = 0
 
@@ -170,6 +199,25 @@ def encode_image_b64(img_rgba: np.ndarray) -> str:
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     return base64.b64encode(buf.getvalue()).decode()
+
+
+def get_symbol_specification(symbol_id: str) -> Optional[Dict]:
+    """Return controlled metadata for a symbol ID, if a specification exists."""
+    normalized_id = re.sub(r"\D", "", str(symbol_id))
+    specification = SYMBOL_SPECIFICATIONS.get(normalized_id)
+    return dict(specification) if specification else None
+
+
+def attach_symbol_specifications(symbols: List[Dict]) -> List[Dict]:
+    """Add controlled specification metadata to matched symbols at generation time."""
+    enriched = []
+    for symbol in symbols:
+        item = dict(symbol)
+        specification = get_symbol_specification(item.get("code", ""))
+        if specification:
+            item["specification"] = specification
+        enriched.append(item)
+    return enriched
 
 
 def scan_symbol_assets():
@@ -889,6 +937,15 @@ async def api_catalog():
     }
 
 
+@app.get("/api/symbols/{symbol_id}")
+async def api_symbol_specification(symbol_id: str):
+    """Return the controlled specification for one symbol."""
+    specification = get_symbol_specification(symbol_id)
+    if not specification:
+        raise HTTPException(404, f"No specification found for symbol {symbol_id}")
+    return specification
+
+
 @app.get("/api/generate/{label_id}")
 async def api_generate(label_id: str, dpi: int = 600):
     """Generate label: returns normalized symbol positions + base64 images."""
@@ -916,13 +973,15 @@ async def api_generate(label_id: str, dpi: int = 600):
             if asset and asset.get('image_b64'):
                 sym_images[sym['asset']] = asset['image_b64']
 
+        symbols = attach_symbol_specifications(lab['symbols'])
         result = {
             "label_id": lab['id'],
             "title": lab['title'],
             "label_size": f"{lab['h_mm']} X {lab['w_mm']} mm",
             "w_mm": int(lab['w_mm']),
             "h_mm": int(lab['h_mm']),
-            "symbols": sanitize(lab['symbols']),
+            "symbols": sanitize(symbols),
+            "symbol_specifications": [s['specification'] for s in symbols if 'specification' in s],
             "text_region": sanitize(lab.get('text_region')),
             "symbol_images": sym_images,
             "symbols_placed": len(lab['symbols']),
