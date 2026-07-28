@@ -573,6 +573,38 @@ def country_text_region(text_elements):
     }
 
 
+def is_branding_text(text: str) -> bool:
+    """Keep a manufacturer wordmark in the reference artwork, not in country text."""
+    normalized = re.sub(r"\s+", "", str(text or "")).upper()
+    return normalized in {"PHILIPS"}
+
+
+def fallback_country_text_region(matched_symbols: List[Dict]) -> Dict:
+    """Reserve the controlled text zone for outlined reference-label PDFs.
+
+    Some controlled drawings convert their lettering to vector outlines, so a
+    PDF text extractor returns no spans.  The reference layout still gives a
+    reliable structure: branding at the top, country text above the approved
+    symbols.  Only symbols with an approved specification are considered here
+    so an incidental graphic match cannot shrink the text box.
+    """
+    approved_symbols = [
+        symbol for symbol in matched_symbols
+        if get_symbol_specification(symbol.get('code', '')) is not None
+    ]
+    symbol_top = min((symbol['y'] for symbol in approved_symbols), default=0.76)
+    top, bottom = 0.18, max(0.36, symbol_top - 0.025)
+    return {
+        'x': 0.06,
+        'y': top,
+        'w': 0.88,
+        'h': round(max(0.16, bottom - top), 4),
+        'font_size': 2.8,
+        'text': '',
+        'detected_from': 'reference-layout',
+    }
+
+
 def build_text_mask(page, label_bounds_px, render_dpi):
     """Build binary mask of text regions inside the label crop."""
     bx, by, bw, bh = label_bounds_px
@@ -929,7 +961,11 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
     country_elements = extract_text_elements(
         page, (bx, by, bw, bh), matched_symbols, include_symbol_text=False
     )
-    editable_country_region = country_text_region(country_elements)
+    editable_country_region = country_text_region(
+        [element for element in country_elements if not is_branding_text(element['text'])]
+    )
+    if editable_country_region is None:
+        editable_country_region = fallback_country_text_region(matched_symbols)
     n_matched = len(matched_symbols)
     log.info(f"  Result: {n_matched} matched, {len(failed_symbols)} skipped, "
              f"{n_components} components")

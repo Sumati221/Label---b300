@@ -20,14 +20,10 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .label-container{position:relative;border:2px solid #1a73e8;border-radius:4px;box-shadow:0 2px 12px rgba(0,0,0,.1);background:#fff}
 .label-container .template-base{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}
 .label-container img.symbol{position:absolute;pointer-events:none}
-.edited-symbol{position:absolute;z-index:5;background:#fff;pointer-events:none}
-.edited-symbol img{width:100%;height:100%;object-fit:fill;display:block}
-.ai-fab{position:fixed;right:22px;bottom:20px;z-index:30;border:0;border-radius:18px;background:#0d47a1;color:#fff;font-size:12px;font-weight:700;padding:10px 16px;box-shadow:0 3px 12px rgba(0,0,0,.2);cursor:pointer}
-.ai-panel{position:fixed;right:22px;bottom:20px;z-index:31;width:320px;background:#fff;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.22);overflow:hidden}
-.ai-panel.hidden,.ai-fab.hidden{display:none}.ai-head{display:flex;justify-content:space-between;align-items:center;background:#0d47a1;color:#fff;padding:10px 12px;font-size:12px;font-weight:700}.ai-head button{border:0;background:transparent;color:#fff;font-size:18px;cursor:pointer}.ai-body{padding:10px}.ai-help{font-size:11px;color:#555;line-height:1.4;background:#f4f7fb;padding:8px;border-radius:6px}.ai-history{font-size:11px;line-height:1.35;max-height:120px;overflow:auto;margin:8px 0}.ai-input{display:flex;gap:6px}.ai-input input{min-width:0;flex:1;padding:8px;border:1px solid #9db6d8;border-radius:6px}.ai-input button{border:0;border-radius:6px;background:#0d47a1;color:#fff;font-weight:700;padding:8px 11px;cursor:pointer}
-.label-container .text-field{position:absolute;border:0;background:#fff;color:#222;font-family:Arial,sans-serif;line-height:1.12;padding:1px 2px;outline:none;overflow:hidden;resize:none}
-.label-container .text-field:focus{border-color:#1a73e8;background:rgba(200,230,255,.3)}
-.label-container .country-text-field{border:1px dashed #1a73e8;background:rgba(235,244,255,.96);box-shadow:0 0 0 1px rgba(26,115,232,.12)}
+.controlled-symbol{position:absolute;z-index:5;background:#fff;pointer-events:none}
+.controlled-symbol img{width:100%;height:100%;object-fit:fill;display:block}
+.label-container .country-text-field{position:absolute;z-index:6;border:1px dashed #1a73e8;background:#fff;color:#222;font-family:Arial,sans-serif;line-height:1.18;padding:3px 4px;outline:none;overflow:hidden;resize:none;box-shadow:0 0 0 1px rgba(26,115,232,.12)}
+.label-container .country-text-field:focus{border-color:#0d47a1;background:#f7fbff}
 .meta{font-size:11px;color:#666;margin-top:8px;text-align:center}
 .log{margin-top:12px;background:#f5f5f7;border-radius:6px;padding:6px;font-size:9px;font-family:monospace;max-height:140px;overflow-y:auto;line-height:1.6;color:#555}
 .toggle{display:flex;align-items:center;gap:6px;margin:8px 0;font-size:11px}
@@ -64,16 +60,6 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
   <p style="color:#888;margin-top:40px">Select a label and click Generate</p>
 </div>
 </div>
-<button id="aiFab" class="ai-fab" type="button" onclick="openAiEditor()">✨ AI Editor</button>
-<div id="aiPanel" class="ai-panel hidden">
-  <div class="ai-head">✨ AI Label Editor <button type="button" onclick="closeAiEditor()">×</button></div>
-  <div class="ai-body">
-    <div class="ai-help">Describe the change you want. I will propose it for your review. Examples: <br>• “increase INMETRO size by 20%”<br>• “move Thai FDA right 2 mm”<br>• “replace Tel 02-6143300 with Tel 02-6143301”</div>
-    <div id="aiHistory" class="ai-history"></div>
-    <div class="ai-input"><input id="aiCommand" placeholder="Describe an edit…" onkeydown="if(event.key==='Enter')sendAiCommand()"><button type="button" onclick="sendAiCommand()">Send</button></div>
-  </div>
-</div>
-
 <script>
 let catalog=[], currentId='', lastRender=null;
 
@@ -184,11 +170,9 @@ async function generate(){
   finally{btn.disabled=false;btn.textContent='Generate Label'}
 }
 function renderLabel(data,countryText=''){
-  if(!data._editableText){
-    const elements=(data.text_elements||[]).map((item,index)=>({...item,id:`text-${index}`}));
-    const countryRegion=data.country_text_region;
-    data._editableText=countryText&&countryRegion?[{...countryRegion,id:'country-text',text:countryText}]:elements;
-  }
+  const countryRegion=data.country_text_region;
+  if(!data._countryText){data._countryText=countryText||(countryRegion?countryRegion.text:'');}
+  if(countryText)data._countryText=countryText;
   lastRender={data,countryText};
   const preview=document.getElementById('preview');
   const SCALE=3.5;
@@ -199,91 +183,26 @@ function renderLabel(data,countryText=''){
   if(hasTemplateArtwork){
     html+=`<img class="template-base" alt="Source label artwork" src="data:image/png;base64,${data.label_image}">`;
   }
-  if(!hasTemplateArtwork){
-    (data.symbols||[]).forEach(sym=>{
-      const imgData=(data.symbol_images||{})[sym.asset];
-      if(!imgData)return;
-      const x=(sym.x*100).toFixed(2),y=(sym.y*100).toFixed(2);
-      const w=(sym.w*100).toFixed(2),h=(sym.h*100).toFixed(2);
-      html+=`<img class="symbol" src="data:image/png;base64,${imgData}" style="left:${x}%;top:${y}%;width:${w}%;height:${h}%;filter:grayscale(100%)">`;
-    });
-  }
-  const editableText=data._editableText||[];
-  editableText.forEach((text,index)=>{
-    const tx=(text.x*100).toFixed(2),ty=(text.y*100).toFixed(2);
-    const tw=(text.w*100).toFixed(2),th=(text.h*100).toFixed(2);
-    const fontMm=Number(text.font_size||2.8);
-    const fontPx=Math.max(7,Math.min(22,fontMm*SCALE));
-    const fieldClass=text.id==='country-text'?'text-field country-text-field':'text-field';
-    const label=text.id==='country-text'?'Editable country-specific label text':'Editable label text';
-    html+=`<textarea class="${fieldClass}" aria-label="${label}" title="${label}" data-text-index="${index}" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateLabelText(${index},this.value)">${escapeHtml(text.text)}</textarea>`;
-  });
-  (data.symbols||[]).filter(sym=>sym._edited).forEach(sym=>{
+  // The reference PDF supplies the controlled layout.  Cover each reference
+  // symbol and repaint it with the approved symbol asset at the same position.
+  (data.symbols||[]).slice().sort((a,b)=>a.y-b.y||a.x-b.x).forEach(sym=>{
     const imgData=(data.symbol_images||{})[sym.asset];
     if(!imgData)return;
-    html+=`<div class="edited-symbol" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Edited symbol" src="data:image/png;base64,${imgData}"></div>`;
+    html+=`<div class="controlled-symbol" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Controlled symbol ${escapeHtml(sym.code||'')}" src="data:image/png;base64,${imgData}"></div>`;
   });
+  if(countryRegion){
+    const tx=(countryRegion.x*100).toFixed(2),ty=(countryRegion.y*100).toFixed(2);
+    const tw=(countryRegion.w*100).toFixed(2),th=(countryRegion.h*100).toFixed(2);
+    const fontPx=Math.max(8,Math.min(18,Number(countryRegion.font_size||2.8)*SCALE));
+    html+=`<textarea class="country-text-field" aria-label="Country-specific label text" title="Country-specific label text" placeholder="Country-specific label text" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateCountryText(this.value)">${escapeHtml(data._countryText||'')}</textarea>`;
+  }
   html+=`</div>`;
   html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
   preview.innerHTML=html;
-  return Boolean(countryText&&editableText.length);
+  return Boolean(countryText&&countryRegion);
 }
-function updateLabelText(index,value){
-  if(lastRender&&lastRender.data._editableText[index])lastRender.data._editableText[index].text=value;
-}
-function openAiEditor(){document.getElementById('aiPanel').classList.remove('hidden');document.getElementById('aiFab').classList.add('hidden');}
-function closeAiEditor(){document.getElementById('aiPanel').classList.add('hidden');document.getElementById('aiFab').classList.remove('hidden');}
-function aiMessage(message,error=false){const row=document.createElement('div');row.style.color=error?'#b3261e':'#174ea6';row.textContent=message;document.getElementById('aiHistory').appendChild(row);}
-function findPromptSymbol(target){
-  if(!lastRender)return null;
-  const needle=target.toLowerCase().replace(/[^a-z0-9]/g,'');
-  return (lastRender.data.symbols||[]).find(sym=>{
-    const spec=sym.specification||{};
-    return String(sym.code||'').toLowerCase().includes(needle)||String(sym.asset||'').toLowerCase().replace(/[^a-z0-9]/g,'').includes(needle)||String(spec.symbol_name||'').toLowerCase().replace(/[^a-z0-9]/g,'').includes(needle);
-  });
-}
-function findEditableText(target){
-  if(!lastRender)return null;
-  const needle=String(target||'').trim().toLowerCase();
-  if(!needle)return null;
-  return (lastRender.data._editableText||[]).find(item=>String(item.text||'').toLowerCase().includes(needle));
-}
-function countryTextField(){
-  return (lastRender?.data?._editableText||[]).find(item=>item.id==='country-text')||null;
-}
-function isGenericTextTarget(target){
-  return ['text','the text','label text','country text','country-specific text','country specific text'].includes(String(target||'').trim().toLowerCase());
-}
-async function sendAiCommand(){
-  const input=document.getElementById('aiCommand'),command=input.value.trim();
-  if(!command)return;input.value='';
-  if(!lastRender){aiMessage('Generate a label before editing.',true);return;}
-  aiMessage('Interpreting your requested edit…');
-  try{
-    const r=await fetch('/api/interpret-edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command})});
-    const reply=await r.json();
-    if(!r.ok||reply.error)throw new Error(reply.error||'The AI editor could not interpret that request.');
-    const edit=reply.proposal||{};
-    const operation=String(edit.operation||'').toLowerCase().replace(/\s+/g,'_');
-    if(operation.includes('replace')){
-      const target=String(edit.target||'');
-      const field=isGenericTextTarget(target)?countryTextField():(findEditableText(target)||countryTextField());
-      if(!field){aiMessage('Select a Country label text and CDLM product first; this creates the editable country-specific text box on the preview.',true);return;}
-      field.text=String(edit.replacement_text||'');renderLabel(lastRender.data,lastRender.countryText);
-      aiMessage('Updated the editable country-specific text box. Please review it before using the label.');return;
-    }
-    const symbol=findPromptSymbol(edit.target||'');
-    if(!symbol){aiMessage(`I understood “${edit.target||'this item'}”, but could not locate that symbol.`,true);return;}
-    const direction=String(edit.direction||'').toLowerCase(),amount=Number(edit.amount||0),unit=String(edit.unit||'').toLowerCase();
-    if(operation.includes('move')&&unit==='mm'&&['left','right','up','down'].includes(direction)){
-      if(direction==='left')symbol.x-=amount/lastRender.data.w_mm;if(direction==='right')symbol.x+=amount/lastRender.data.w_mm;if(direction==='up')symbol.y-=amount/lastRender.data.h_mm;if(direction==='down')symbol.y+=amount/lastRender.data.h_mm;
-      symbol.x=Math.max(0,Math.min(1-symbol.w,symbol.x));symbol.y=Math.max(0,Math.min(1-symbol.h,symbol.y));symbol._edited=true;renderLabel(lastRender.data,lastRender.countryText);aiMessage(`Moved ${symbol.code||symbol.asset}; please review the position.`);return;
-    }
-    if((operation.includes('resize')||operation.includes('increase')||operation.includes('decrease'))&&unit==='percent'&&amount>0){
-      const factor=direction==='decrease'?1-amount/100:1+amount/100;symbol.w*=factor;symbol.h*=factor;symbol._edited=true;renderLabel(lastRender.data,lastRender.countryText);aiMessage(`Resized ${symbol.code||symbol.asset}; please review the result.`);return;
-    }
-    aiMessage('I understood the request but it is not yet a supported label edit. Try moving/resizing a symbol or replacing existing label text.',true);
-  }catch(error){aiMessage(error.message,true);}
+function updateCountryText(value){
+  if(lastRender)lastRender.data._countryText=value;
 }
 function addLog(msg,err=false,ok=false){
   const b=document.getElementById('logBox');
