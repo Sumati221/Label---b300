@@ -147,8 +147,13 @@ class CountryHtmlParser(HTMLParser):
             self.styles.pop()
 
     def handle_data(self, data):
-        if data:
-            self.lines[-1].append((data, dict(self.styles[-1])))
+        if not data:
+            return
+        for index, fragment in enumerate(data.split("\n")):
+            if fragment:
+                self.lines[-1].append((fragment, dict(self.styles[-1])))
+            if index < len(data.split("\n")) - 1:
+                self.lines.append([])
 
 
 def _export_font(size_px: float, bold: bool, italic: bool):
