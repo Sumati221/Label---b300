@@ -743,7 +743,27 @@ def is_branding_text(text: str) -> bool:
     return normalized in {"PHILIPS"}
 
 
-def fallback_country_text_region(matched_symbols: List[Dict]) -> Dict:
+def detect_source_text_bottom(label_crop: np.ndarray, matched_symbols: List[Dict]) -> Optional[float]:
+    """Estimate the lowest outlined/source text line above the first symbol."""
+    approved = [symbol for symbol in matched_symbols if get_symbol_specification(symbol.get('code', ''))]
+    if not approved or label_crop is None:
+        return None
+    first_symbol_y = min(float(symbol.get('source_y', symbol['y'])) for symbol in approved)
+    h, w = label_crop.shape[:2]
+    y0, y1 = int(h * 0.16), int(h * max(0.16, first_symbol_y - 0.02))
+    x0, x1 = int(w * 0.05), int(w * 0.95)
+    if y1 <= y0:
+        return None
+    gray = cv2.cvtColor(label_crop, cv2.COLOR_BGR2GRAY) if label_crop.ndim == 3 else label_crop
+    dark = gray[y0:y1, x0:x1] < 100
+    row_counts = np.count_nonzero(dark, axis=1)
+    rows = np.where(row_counts >= max(8, int((x1 - x0) * 0.01)))[0]
+    if not len(rows):
+        return None
+    return round((y0 + int(rows[-1]) + 1) / h, 4)
+
+
+def fallback_country_text_region(matched_symbols: List[Dict], source_text_bottom: Optional[float] = None) -> Dict:
     """Reserve the controlled text zone for outlined reference-label PDFs.
 
     Some controlled drawings convert their lettering to vector outlines, so a
@@ -763,7 +783,7 @@ def fallback_country_text_region(matched_symbols: List[Dict]) -> Dict:
     is_thai_layout = any(symbol.get('code') == '100183' for symbol in approved_symbols)
     left = approved_symbols[0]['x'] if is_thai_layout and approved_symbols else 0.06
     top = 0.06 if is_thai_layout else 0.18
-    bottom = max(top + 0.16, symbol_top - 0.025)
+    bottom = max(top + 0.16, (source_text_bottom + 0.02) if source_text_bottom else symbol_top - 0.025)
     return {
         'x': round(left, 4),
         'y': top,
@@ -940,6 +960,13 @@ def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets,
                 'y': round(norm_y, 4),
                 'w': round(norm_w, 4),
                 'h': round(norm_h, 4),
+                # Preserve the original detected artwork box. A controlled
+                # symbol can later be reflowed without leaving a second copy
+                # of the reference artwork behind.
+                'source_x': round(float(comp['x']) / bw, 4),
+                'source_y': round(float(comp['y']) / bh, 4),
+                'source_w': round(float(comp['w']) / bw, 4),
+                'source_h': round(float(comp['h']) / bh, 4),
                 'confidence': round(best_score, 4)
             })
             log.info(f"  MATCH {asset['file']} -> comp[{best_idx}] "
@@ -1154,7 +1181,9 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
         [element for element in country_elements if not is_branding_text(element['text'])]
     )
     if editable_country_region is None:
-        editable_country_region = fallback_country_text_region(matched_symbols)
+        editable_country_region = fallback_country_text_region(
+            matched_symbols, detect_source_text_bottom(label_crop, matched_symbols)
+        )
 
     # The controlled reference labels with one approved symbol align that
     # symbol's left edge with the country-specific text block.  Template
@@ -1166,6 +1195,13 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
     ]
     if len(approved_symbols) == 1:
         approved_symbols[0]['x'] = round(editable_country_region['x'], 4)
+        # Reflow non-Thai controlled artwork 1 mm below the actual last source
+        # text line, rather than retaining empty space from the reference PDF.
+        if approved_symbols[0].get('code') != '100183':
+            approved_symbols[0]['y'] = round(min(
+                1.0 - LABEL_EDGE_MARGIN_MM / h_mm - approved_symbols[0]['h'],
+                editable_country_region['y'] + editable_country_region['h'] + LABEL_EDGE_MARGIN_MM / h_mm
+            ), 4)
     editable_thai_symbol_region = thai_symbol_number_region(matched_symbols)
     n_matched = len(matched_symbols)
     log.info(f"  Result: {n_matched} matched, {len(failed_symbols)} skipped, "
@@ -1470,6 +1506,15 @@ async def api_export_png(request: LabelExportRequest):
             symbol_h = max(1, round(float(symbol.get("h", 0)) * height))
             asset = Image.open(io.BytesIO(base64.b64decode(raw_asset, validate=True))).convert("RGBA")
             asset = asset.resize((symbol_w, symbol_h), Image.Resampling.LANCZOS)
+            # Clear the original detected artwork (with a small bleed margin)
+            # before drawing at its controlled/reflowed position.
+            source_x = round(float(symbol.get("source_x", symbol.get("x", 0))) * width)
+            source_y = round(float(symbol.get("source_y", symbol.get("y", 0))) * height)
+            source_w = max(1, round(float(symbol.get("source_w", symbol.get("w", 0))) * width))
+            source_h = max(1, round(float(symbol.get("source_h", symbol.get("h", 0))) * height))
+            mask_pad = max(2, round(request.dpi / 40))
+            draw.rectangle((source_x - mask_pad, source_y - mask_pad,
+                            source_x + source_w + mask_pad, source_y + source_h + mask_pad), fill="white")
             draw.rectangle((x, y, x + symbol_w, y + symbol_h), fill="white")
             image.paste(asset, (x, y), asset)
 

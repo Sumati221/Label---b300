@@ -22,6 +22,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .label-container img.symbol{position:absolute;pointer-events:none}
 .controlled-symbol{position:absolute;z-index:5;background:#fff;pointer-events:none}
 .controlled-symbol img{width:100%;height:100%;object-fit:fill;display:block}
+.controlled-source-mask{position:absolute;z-index:4;background:#fff;pointer-events:none}
 .label-container .country-text-field{position:absolute;z-index:6;border:1px dashed #1a73e8;background:#fff;color:#222;font-family:Arial,sans-serif;line-height:1.18;padding:3px 4px;outline:none;overflow:hidden;white-space:pre-wrap;box-shadow:0 0 0 1px rgba(26,115,232,.12)}
 .label-container .country-text-field p,.label-container .country-text-field div{margin:0 0 2px}
 .label-container .country-text-field:focus{border-color:#0d47a1;background:#f7fbff}
@@ -325,6 +326,10 @@ function renderLabel(data,countryText=''){
   (data.symbols||[]).filter(sym=>sym.specification&&sym.code!=='100183').slice().sort((a,b)=>a.y-b.y||a.x-b.x).forEach(sym=>{
     const imgData=(data.symbol_images||{})[sym.asset];
     if(!imgData)return;
+    const sourceX=Number(sym.source_x??sym.x),sourceY=Number(sym.source_y??sym.y);
+    const sourceW=Number(sym.source_w??sym.w),sourceH=Number(sym.source_h??sym.h);
+    const maskPad=0.007;
+    html+=`<div class="controlled-source-mask" style="left:${((sourceX-maskPad)*100).toFixed(2)}%;top:${((sourceY-maskPad)*100).toFixed(2)}%;width:${((sourceW+2*maskPad)*100).toFixed(2)}%;height:${((sourceH+2*maskPad)*100).toFixed(2)}%"></div>`;
     html+=`<div class="controlled-symbol" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Controlled symbol ${escapeHtml(sym.code||'')}" src="data:image/png;base64,${imgData}"></div>`;
   });
   if(countryRegion){
