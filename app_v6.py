@@ -1337,7 +1337,10 @@ async def api_export_png(request: LabelExportRequest):
         draw = ImageDraw.Draw(image)
 
         for symbol in request.symbols:
-            if not symbol.get("specification"):
+            # 100183's generic PNG has no Thai notification number. Preserve
+            # the complete, numbered symbol already present in the reference
+            # label image rather than replacing it with an incomplete asset.
+            if not symbol.get("specification") or symbol.get("code") == "100183":
                 continue
             raw_asset = request.symbol_images.get(symbol.get("asset", ""))
             if not raw_asset:
