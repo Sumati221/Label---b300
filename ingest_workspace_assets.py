@@ -30,6 +30,8 @@ def canonical_id(filename: str) -> str:
 
 
 def clean_source_files(folder: Path, suffixes: set[str]):
+    if not folder.is_dir():
+        return
     for source in sorted(folder.iterdir()):
         if not source.is_file() or source.suffix.lower() not in suffixes:
             continue
