@@ -22,7 +22,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .label-container img.symbol{position:absolute;pointer-events:none}
 .controlled-symbol{position:absolute;z-index:5;background:#fff;pointer-events:none}
 .controlled-symbol img{width:100%;height:100%;object-fit:fill;display:block}
-.label-container .country-text-field{position:absolute;z-index:6;border:1px dashed #1a73e8;background:#fff;color:#222;font-family:Arial,sans-serif;line-height:1.18;padding:3px 4px;outline:none;overflow:auto;white-space:pre-wrap;box-shadow:0 0 0 1px rgba(26,115,232,.12)}
+.label-container .country-text-field{position:absolute;z-index:6;border:1px dashed #1a73e8;background:#fff;color:#222;font-family:Arial,sans-serif;line-height:1.18;padding:3px 4px;outline:none;overflow:hidden;white-space:pre-wrap;box-shadow:0 0 0 1px rgba(26,115,232,.12)}
 .label-container .country-text-field p,.label-container .country-text-field div{margin:0 0 2px}
 .label-container .country-text-field:focus{border-color:#0d47a1;background:#f7fbff}
 .meta{font-size:11px;color:#666;margin-top:8px;text-align:center}
@@ -177,6 +177,7 @@ function rtfToHtml(rtf){
 }
 function updateCountryText(element){
   if(lastRender)lastRender.data._countryHtml=sanitizeCountryHtml(element.innerHTML);
+  requestAnimationFrame(fitCountryText);
 }
 function pasteCountryText(event){
   event.preventDefault();
@@ -276,7 +277,18 @@ function renderLabel(data,countryText=''){
   html+=`</div>`;
   html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
   preview.innerHTML=html;
+  requestAnimationFrame(fitCountryText);
   return Boolean(countryText&&countryRegion);
+}
+function fitCountryText(){
+  const field=document.querySelector('.country-text-field');
+  if(!field)return;
+  // Remove the editing scrollbar and reduce only when the pasted content would
+  // overflow its controlled country-text area.
+  let size=parseFloat(getComputedStyle(field).fontSize||'10');
+  while(field.scrollHeight>field.clientHeight+1&&size>6){
+    size-=0.25;field.style.fontSize=`${size}px`;
+  }
 }
 async function downloadLabelPng(){
   const label=document.querySelector('.label-container');
@@ -306,14 +318,18 @@ async function downloadLabelPng(){
     const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
     const context=canvas.getContext('2d');context.drawImage(image,0,0,width,height);
     canvas.toBlob(blob=>{
-      if(!blob)return;
+      if(!blob){addLog('PNG export failed. Please try again.',true);return;}
       const link=document.createElement('a');
       link.href=URL.createObjectURL(blob);
       link.download=`${lastRender.data.label_id||'label'}-${dpi}dpi.png`;
-      link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+      link.style.display='none';document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(link.href),1000);
     },'image/png');
+    URL.revokeObjectURL(svgUrl);
   };
-  image.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);
+  image.onerror=()=>{URL.revokeObjectURL(svgUrl);addLog('PNG export could not render in this browser.',true);};
+  const svgUrl=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml;charset=utf-8'}));
+  image.src=svgUrl;
 }
 function addLog(msg,err=false,ok=false){
   const b=document.getElementById('logBox');
