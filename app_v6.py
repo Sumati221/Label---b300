@@ -200,8 +200,10 @@ def render_country_html(draw, region: Dict, html: str, dpi: int, width: int, hei
                 if not chunk.isspace() and cursor_x > x0 + padding and cursor_x + chunk_width > x0 + padding + available_width:
                     cursor_x = x0 + padding
                     cursor_y += int(line_height)
-                    if cursor_y >= y1 - padding:
+                    if cursor_y + line_height > y1 - padding:
                         return
+                if cursor_y + line_height > y1 - padding:
+                    return
                 draw.text((cursor_x, cursor_y), chunk, fill="black", font=font)
                 cursor_x += chunk_width
         cursor_y += int(line_height)
@@ -712,14 +714,15 @@ def fallback_country_text_region(matched_symbols: List[Dict]) -> Dict:
     # labels reserve the upper band for the PHILIPS wordmark, so their text
     # field begins below that brand area.
     is_thai_layout = any(symbol.get('code') == '100183' for symbol in approved_symbols)
+    left = approved_symbols[0]['x'] if is_thai_layout and approved_symbols else 0.06
     top = 0.06 if is_thai_layout else 0.18
     bottom = max(top + 0.16, symbol_top - 0.025)
     return {
-        'x': 0.06,
+        'x': round(left, 4),
         'y': top,
         'w': 0.88,
         'h': round(max(0.16, bottom - top), 4),
-        'font_size': 2.8,
+        'font_size': 1.6,
         'text': '',
         'detected_from': 'reference-layout',
     }
