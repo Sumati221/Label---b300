@@ -526,7 +526,7 @@ def load_layout_manifests() -> Dict:
 
 
 def apply_layout_manifest(label_id: str, matched_symbols: List[Dict], country_region: Optional[Dict],
-                          w_mm: float, h_mm: float) -> Optional[Dict]:
+                          w_mm: float, h_mm: float, symbol_assets: Optional[List[Dict]] = None) -> Optional[Dict]:
     """Apply a reviewed layout manifest without reflowing the reference design."""
     manifest = load_layout_manifests().get(label_id)
     if not manifest or manifest.get("status") != "reviewed":
@@ -543,6 +543,24 @@ def apply_layout_manifest(label_id: str, matched_symbols: List[Dict], country_re
     # artwork allowed on that label.  Do not let a weak visual match from an
     # expanded asset library introduce a symbol not present in the guide.
     matched_symbols[:] = [symbol for symbol in matched_symbols if str(symbol.get("code", "")) in slots]
+    present_codes = {str(symbol.get("code", "")) for symbol in matched_symbols}
+    assets_by_code = {str(asset.get("code", "")): asset for asset in (symbol_assets or [])}
+    for code in slots:
+        if code in present_codes:
+            continue
+        asset = assets_by_code.get(code)
+        if asset is None:
+            log.warning("Reviewed manifest %s references missing asset %s", label_id, code)
+            continue
+        # The manifest is a reviewed extraction of this reference design. It
+        # is therefore more reliable than vision matching for the presence of
+        # its declared artwork, including wordmarks with sparse glyph shapes.
+        matched_symbols.append({
+            "asset": asset["file"], "code": code,
+            "x": 0.0, "y": 0.0, "w": 0.0, "h": 0.0,
+            "source_x": None, "source_y": None, "source_w": None, "source_h": None,
+            "confidence": 1.0, "match_source": "reviewed-layout-manifest",
+        })
     for symbol in matched_symbols:
         slot = slots.get(str(symbol.get("code", "")))
         if not isinstance(slot, dict):
@@ -1397,7 +1415,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600, label_id: Optiona
         ), 4)
     template_id = label_id or fname.replace('.pdf', '')
     layout_manifest = apply_layout_manifest(
-        template_id, matched_symbols, editable_country_region, w_mm, h_mm
+        template_id, matched_symbols, editable_country_region, w_mm, h_mm, symbol_assets
     )
     if layout_manifest:
         log.info("  Applied reviewed layout manifest for %s", fname)
