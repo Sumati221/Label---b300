@@ -28,6 +28,9 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .thai-symbol-edit{position:absolute;z-index:7;border:1px dashed #1a73e8;background:#fff;color:#111;font-family:Arial,sans-serif;line-height:1.1;padding:1px 2px;outline:none;overflow:hidden;white-space:nowrap;text-align:left}
 .thai-symbol-edit:focus{border-color:#0d47a1;background:#f7fbff}
 .thai-symbol-hotspot{position:absolute;z-index:7;border:0;background:transparent;cursor:text;padding:0}
+.thai-source-mask{position:absolute;z-index:4;background:#fff;pointer-events:none}
+.thai-native-symbol{position:absolute;z-index:5;overflow:hidden;background:#fff;pointer-events:none}
+.thai-native-symbol img{position:absolute;max-width:none;max-height:none;pointer-events:none}
 .meta{font-size:11px;color:#666;margin-top:8px;text-align:center}
 .log{margin-top:12px;background:#f5f5f7;border-radius:6px;padding:6px;font-size:9px;font-family:monospace;max-height:140px;overflow-y:auto;line-height:1.6;color:#555}
 .toggle{display:flex;align-items:center;gap:6px;margin:8px 0;font-size:11px}
@@ -302,22 +305,48 @@ function renderLabel(data,countryText=''){
     const fontPx=Math.max(8,Math.min(18,Number(countryRegion.font_size||2.8)*SCALE));
     html+=`<div class="country-text-field" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Country-specific label text" title="Paste Word text here; bold, italic, font size, and font family are retained" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateCountryText(this)" onpaste="pasteCountryText(event)">${data._countryHtml||'<span style="color:#777">Country-specific label text</span>'}</div>`;
   }
+  const thaiSymbol=(data.symbols||[]).find(sym=>sym.code==='100183'&&sym.specification);
   const thaiRegion=data.thai_symbol_region;
-  if(thaiRegion){
+  if(thaiSymbol&&thaiRegion){
+    const renderedThaiY=Number.isFinite(data._thaiRenderedY)?data._thaiRenderedY:thaiSymbol.y;
+    const numberOffset=thaiRegion.y-thaiSymbol.y;
+    const sourceX=(thaiSymbol.x*100).toFixed(2),sourceY=(thaiSymbol.y*100).toFixed(2);
+    const sourceW=(thaiSymbol.w*100).toFixed(2),sourceH=(thaiSymbol.h*100).toFixed(2);
+    const cropWidth=(100/thaiSymbol.w).toFixed(2),cropHeight=(100/thaiSymbol.h).toFixed(2);
+    const cropLeft=(-thaiSymbol.x/thaiSymbol.w*100).toFixed(2),cropTop=(-thaiSymbol.y/thaiSymbol.h*100).toFixed(2);
+    html+=`<div class="thai-source-mask" style="left:${sourceX}%;top:${sourceY}%;width:${sourceW}%;height:${sourceH}%"></div>`;
+    html+=`<div class="thai-native-symbol" data-thai-offset="0" style="left:${sourceX}%;top:${(renderedThaiY*100).toFixed(2)}%;width:${sourceW}%;height:${sourceH}%"><img alt="Thai FDA symbol" src="data:image/png;base64,${data.label_image}" style="width:${cropWidth}%;height:${cropHeight}%;left:${cropLeft}%;top:${cropTop}%"></div>`;
     const tx=(thaiRegion.x*100).toFixed(2),ty=(thaiRegion.y*100).toFixed(2);
     const tw=(thaiRegion.w*100).toFixed(2),th=(thaiRegion.h*100).toFixed(2);
     const fontPx=Math.max(6,Number(thaiRegion.font_size||1.7)*SCALE);
+    const editableTop=((renderedThaiY+numberOffset)*100).toFixed(2);
     if(data._thaiSymbolEditing||data._thaiSymbolText){
-      html+=`<div class="thai-symbol-edit" contenteditable="true" role="textbox" aria-label="Thai FDA notification number" title="Thai FDA notification number" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateThaiSymbolText(this)">${escapeHtml(data._thaiSymbolText||'')}</div>`;
+      html+=`<div class="thai-symbol-edit" data-thai-offset="${numberOffset}" contenteditable="true" role="textbox" aria-label="Thai FDA notification number" title="Thai FDA notification number" style="left:${tx}%;top:${editableTop}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateThaiSymbolText(this)">${escapeHtml(data._thaiSymbolText||'')}</div>`;
     }else{
-      html+=`<button class="thai-symbol-hotspot" type="button" aria-label="Edit Thai FDA notification number" title="Click to replace the Thai FDA notification number" onclick="startThaiSymbolEdit()" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%"></button>`;
+      html+=`<button class="thai-symbol-hotspot" data-thai-offset="${numberOffset}" type="button" aria-label="Edit Thai FDA notification number" title="Click to replace the Thai FDA notification number" onclick="startThaiSymbolEdit()" style="left:${tx}%;top:${editableTop}%;width:${tw}%;height:${th}%"></button>`;
     }
   }
   html+=`</div>`;
   html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
   preview.innerHTML=html;
-  requestAnimationFrame(fitCountryText);
+  requestAnimationFrame(()=>{fitCountryText();positionThaiSymbol();});
   return Boolean(countryText&&countryRegion);
+}
+function positionThaiSymbol(){
+  if(!lastRender)return;
+  const data=lastRender.data;
+  const symbol=(data.symbols||[]).find(item=>item.code==='100183'&&item.specification);
+  const field=document.querySelector('.country-text-field');
+  const label=document.querySelector('.label-container');
+  if(!symbol||!field||!label)return;
+  if((field.innerText||'').trim()==='Country-specific label text')return;
+  const minimumGap=3.5; // 1 mm at the preview scale
+  const newTop=Math.min(1-symbol.h-.02,Math.max(0, (field.offsetTop+field.scrollHeight+minimumGap)/label.clientHeight));
+  data._thaiRenderedY=newTop;
+  document.querySelectorAll('[data-thai-offset]').forEach(element=>{
+    const offset=Number(element.dataset.thaiOffset||0);
+    element.style.top=`${((newTop+offset)*100).toFixed(2)}%`;
+  });
 }
 function fitCountryText(){
   const field=document.querySelector('.country-text-field');
@@ -342,7 +371,8 @@ async function downloadLabelPng(){
       w_mm:data.w_mm,h_mm:data.h_mm,dpi,
       symbols:data.symbols,symbol_images:data.symbol_images,
       country_region:data.country_text_region,country_html:data._countryHtml||'',
-      thai_symbol_region:data.thai_symbol_region,thai_symbol_text:data._thaiSymbolText||''
+      thai_symbol_region:data.thai_symbol_region,thai_symbol_text:data._thaiSymbolText||'',
+      thai_symbol_y:data._thaiRenderedY
     })});
     if(!response.ok)throw new Error('The PNG could not be created.');
     const blob=await response.blob();

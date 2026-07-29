@@ -267,6 +267,7 @@ class LabelExportRequest(BaseModel):
     country_html: str = ""
     thai_symbol_region: Optional[Dict] = None
     thai_symbol_text: str = Field(default="", max_length=100)
+    thai_symbol_y: Optional[float] = Field(default=None, ge=0, le=1)
 
 # Extracted from the controlled specification documents. These values are kept
 # with the app so label generation does not depend on a live AI/SQL request.
@@ -1381,6 +1382,7 @@ async def api_export_png(request: LabelExportRequest):
         image = Image.open(io.BytesIO(source)).convert("RGB").resize(
             (width, height), Image.Resampling.LANCZOS
         )
+        native_template = image.copy()
         draw = ImageDraw.Draw(image)
 
         for symbol in request.symbols:
@@ -1403,9 +1405,28 @@ async def api_export_png(request: LabelExportRequest):
 
         if request.country_region:
             render_country_html(draw, request.country_region, request.country_html, request.dpi, width, height)
+
+        thai_symbol = next((symbol for symbol in request.symbols if symbol.get("code") == "100183"), None)
+        thai_y = None
+        if thai_symbol and request.thai_symbol_y is not None:
+            original_x = round(float(thai_symbol.get("x", 0)) * width)
+            original_y = round(float(thai_symbol.get("y", 0)) * height)
+            symbol_w = max(1, round(float(thai_symbol.get("w", 0)) * width))
+            symbol_h = max(1, round(float(thai_symbol.get("h", 0)) * height))
+            thai_y = round(float(request.thai_symbol_y) * height)
+            native_symbol = native_template.crop((original_x, original_y, original_x + symbol_w, original_y + symbol_h))
+            # The reference crop has a white background, so masking the old
+            # position preserves the blank label before the native artwork is moved.
+            draw.rectangle((original_x, original_y, original_x + symbol_w, original_y + symbol_h), fill="white")
+            image.paste(native_symbol, (original_x, thai_y))
         if request.thai_symbol_region:
+            thai_number_region = dict(request.thai_symbol_region)
+            if thai_symbol and thai_y is not None:
+                thai_number_region["y"] = float(thai_number_region["y"]) + (
+                    float(request.thai_symbol_y) - float(thai_symbol.get("y", 0))
+                )
             render_thai_symbol_text(
-                draw, request.thai_symbol_region, request.thai_symbol_text,
+                draw, thai_number_region, request.thai_symbol_text,
                 request.dpi, width, height
             )
 
