@@ -761,7 +761,9 @@ def thai_symbol_number_region(matched_symbols: List[Dict]) -> Optional[Dict]:
     return {
         'x': round(float(thai['x']) + float(thai['w']) * 0.20, 4),
         'y': round(float(thai['y']) + float(thai['h']) * 0.22, 4),
-        'w': round(float(thai['w']) * 0.60, 4),
+        # Extend far enough to erase the entire previous number (including its
+        # final digits), while remaining inside the right-hand sloping frame.
+        'w': round(float(thai['w']) * 0.69, 4),
         'h': round(float(thai['h']) * 0.56, 4),
         'font_size': 1.7,
         'detected_from': 'thai-fda-symbol',
