@@ -53,6 +53,9 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 <div class="info" id="info"><b>Status:</b> Select a label</div>
 
 <h2>2. Settings</h2>
+<label for="cdlmUpload" style="display:block;font-size:11px;font-weight:600">Upload CDLM workbook (optional)</label>
+<input id="cdlmUpload" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="uploadCdlmWorkbook()">
+<div id="cdlmUploadStatus" style="font-size:10px;color:#666;margin-top:4px">Uses the bundled CDLM workbook by default. Uploads are temporary for this browser session.</div>
 <label for="country">Country label text</label>
 <select id="country"><option value="">-- Select country (optional) --</option></select>
 <label for="product">CDLM product</label>
@@ -75,7 +78,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 </div>
 </div>
 <script>
-let catalog=[], currentId='', lastRender=null;
+let catalog=[], currentId='', lastRender=null, cdlmSessionId='';
 
 async function loadCatalog(){
   try{
@@ -97,21 +100,46 @@ async function loadCatalog(){
 
 async function loadCountryLabelOptions(){
   try{
-    const r=await fetch('/api/country-labels');
+    const suffix=cdlmSessionId?`?session_id=${encodeURIComponent(cdlmSessionId)}`:'';
+    const r=await fetch('/api/country-labels'+suffix);
     const data=await r.json();
     if(data.error) throw new Error(data.error);
     const country=document.getElementById('country');
     const product=document.getElementById('product');
+    country.innerHTML='<option value="">-- Select country (optional) --</option>';
+    product.innerHTML='<option value="">-- Select product (optional) --</option>';
     (data.countries||[]).forEach(value=>country.add(new Option(value,value)));
     (data.products||[]).forEach(value=>product.add(new Option(value,value)));
   }catch(e){addLog('Country label data unavailable: '+e.message,true)}
+}
+
+async function uploadCdlmWorkbook(){
+  const file=document.getElementById('cdlmUpload').files[0];
+  if(!file)return;
+  const status=document.getElementById('cdlmUploadStatus');
+  status.textContent='Reading CDLM workbook…';
+  try{
+    const form=new FormData();form.append('file',file);
+    const response=await fetch('/api/country-labels/upload',{method:'POST',body:form});
+    const data=await response.json();
+    if(!response.ok||data.error)throw new Error(data.detail||data.error||'Unable to read this CDLM workbook.');
+    cdlmSessionId=data.session_id;
+    await loadCountryLabelOptions();
+    status.textContent=`Using ${data.filename}: ${data.countries.length} countries and ${data.products.length} products. Temporary for 30 minutes.`;
+    addLog(`Loaded temporary CDLM workbook: ${data.filename}`,false,true);
+  }catch(error){
+    cdlmSessionId='';
+    status.textContent='Could not load the uploaded CDLM workbook. The bundled workbook remains active.';
+    addLog(error.message,true);
+  }
 }
 
 async function getCountryLabelText(){
   const country=document.getElementById('country').value;
   const product=document.getElementById('product').value;
   if(!country||!product)return '';
-  const r=await fetch(`/api/country-labels?country=${encodeURIComponent(country)}&product=${encodeURIComponent(product)}`);
+  const session=cdlmSessionId?`&session_id=${encodeURIComponent(cdlmSessionId)}`:'';
+  const r=await fetch(`/api/country-labels?country=${encodeURIComponent(country)}&product=${encodeURIComponent(product)}${session}`);
   const data=await r.json();
   if(data.error)throw new Error(data.error);
   const printable=(data.entries||[]).filter(entry=>!entry.is_reference);

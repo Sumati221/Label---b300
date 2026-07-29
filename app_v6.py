@@ -15,6 +15,7 @@ import base64
 import logging
 import time
 import tempfile
+import uuid
 from pathlib import Path
 from typing import List, Dict, Optional
 from html.parser import HTMLParser
@@ -302,6 +303,7 @@ _cache = None
 _cache_t = 0
 _cdlm_cache = None
 _specification_cache = None
+_uploaded_cdlm_sessions: Dict[str, Dict] = {}
 
 
 # ════════════════════════════════════════════════════════════
@@ -415,33 +417,15 @@ def attach_symbol_specifications(symbols: List[Dict]) -> List[Dict]:
     return enriched
 
 
-def load_country_label_matrix() -> Dict:
-    """Read country/product label text from the bundled CDLM workbook.
+def parse_country_label_workbook(workbook) -> Dict:
+    """Read country/product label text from an opened CDLM workbook.
 
     The workbook identifies product applicability with an ``x`` in a product
     column.  Only the literal Text-column value is returned; values beginning
     with ``see`` are document references, not printable label text.
     """
-    global _cdlm_cache
-    if _cdlm_cache is not None:
-        return _cdlm_cache
-
     empty = {"countries": [], "products": [], "entries": [], "error": None}
-    if not HAS_OPENPYXL:
-        empty["error"] = "The CDLM reader dependency is unavailable."
-        _cdlm_cache = empty
-        return _cdlm_cache
-
-    files = sorted(_SYMBOLS.glob("LS-200004_CDLM_Avalon_Family_RevP*.xlsx"))
-    if not files:
-        empty["error"] = "No CDLM workbook was found in data/symbols."
-        _cdlm_cache = empty
-        return _cdlm_cache
-
-    # Prefer the canonical filename if both a duplicate and original are present.
-    source = next((f for f in files if " (" not in f.name), files[0])
     try:
-        workbook = load_workbook(source, read_only=True, data_only=True)
         worksheet = workbook["Country Label"]
         product_columns = {
             column: str(worksheet.cell(2, column).value).strip()
@@ -467,8 +451,7 @@ def load_country_label_matrix() -> Dict:
                     "is_reference": text.lower().startswith("see "),
                     "source_row": row_number,
                 })
-        workbook.close()
-        _cdlm_cache = {
+        return {
             "countries": sorted({entry["country"] for entry in entries}),
             "products": sorted(product_columns.values()),
             "entries": entries,
@@ -477,7 +460,29 @@ def load_country_label_matrix() -> Dict:
     except Exception as error:
         log.error(f"CDLM read error: {error}", exc_info=True)
         empty["error"] = "Unable to read the CDLM workbook."
-        _cdlm_cache = empty
+    return empty
+
+
+def load_country_label_matrix() -> Dict:
+    """Read country/product label text from the bundled CDLM workbook."""
+    global _cdlm_cache
+    if _cdlm_cache is not None:
+        return _cdlm_cache
+    if not HAS_OPENPYXL:
+        _cdlm_cache = {"countries": [], "products": [], "entries": [], "error": "The CDLM reader dependency is unavailable."}
+        return _cdlm_cache
+    files = sorted(_SYMBOLS.glob("LS-200004_CDLM_Avalon_Family_RevP*.xlsx"))
+    if not files:
+        _cdlm_cache = {"countries": [], "products": [], "entries": [], "error": "No CDLM workbook was found in data/symbols."}
+        return _cdlm_cache
+    source = next((f for f in files if " (" not in f.name), files[0])
+    workbook = None
+    try:
+        workbook = load_workbook(source, read_only=True, data_only=True)
+        _cdlm_cache = parse_country_label_workbook(workbook)
+    finally:
+        if workbook:
+            workbook.close()
     return _cdlm_cache
 
 
@@ -1363,13 +1368,8 @@ async def api_catalog():
     }
 
 
-@app.get("/api/country-labels")
-async def api_country_labels(country: Optional[str] = None, product: Optional[str] = None):
-    """Expose CDLM options and safe product-label text for the selected pair."""
-    matrix = load_country_label_matrix()
-    if matrix["error"]:
-        return JSONResponse(content={"error": matrix["error"]}, status_code=503)
-
+def cdlm_response(matrix: Dict, country: Optional[str], product: Optional[str]) -> Dict:
+    """Build the public CDLM response for bundled or temporary workbooks."""
     response = {"countries": matrix["countries"], "products": matrix["products"]}
     if country and product:
         response["entries"] = [
@@ -1379,6 +1379,58 @@ async def api_country_labels(country: Optional[str] = None, product: Optional[st
             and "product label" in entry["location"].lower()
         ]
     return response
+
+
+@app.get("/api/country-labels")
+async def api_country_labels(country: Optional[str] = None, product: Optional[str] = None,
+                             session_id: Optional[str] = None):
+    """Expose CDLM options and safe product-label text for the selected pair."""
+    session = _uploaded_cdlm_sessions.get(session_id or "")
+    if session and time.time() - session["created_at"] <= 30 * 60:
+        matrix = session["matrix"]
+    elif session_id:
+        return JSONResponse(content={"error": "The uploaded CDLM workbook session has expired. Upload it again."}, status_code=410)
+    else:
+        matrix = load_country_label_matrix()
+    if matrix["error"]:
+        return JSONResponse(content={"error": matrix["error"]}, status_code=503)
+    return cdlm_response(matrix, country, product)
+
+
+@app.post("/api/country-labels/upload")
+async def api_upload_country_labels(file: UploadFile = File(...)):
+    """Parse an uploaded CDLM XLSX in memory for this browser session only."""
+    if not HAS_OPENPYXL:
+        raise HTTPException(503, "The CDLM reader dependency is unavailable.")
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(400, "Upload an .xlsx CDLM workbook.")
+    payload = await file.read()
+    if not payload or len(payload) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "The workbook must be between 1 byte and 25 MB.")
+    workbook = None
+    try:
+        workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=True)
+        matrix = parse_country_label_workbook(workbook)
+    except Exception as error:
+        log.warning("Uploaded CDLM read error: %s", error)
+        raise HTTPException(422, "Unable to read this CDLM workbook. It must contain a 'Country Label' sheet.")
+    finally:
+        if workbook:
+            workbook.close()
+    if matrix["error"] or not matrix["entries"]:
+        raise HTTPException(422, matrix["error"] or "No country/product label records were found in this workbook.")
+    now = time.time()
+    for key, session in list(_uploaded_cdlm_sessions.items()):
+        if now - session["created_at"] > 30 * 60:
+            del _uploaded_cdlm_sessions[key]
+    session_id = uuid.uuid4().hex
+    _uploaded_cdlm_sessions[session_id] = {"created_at": now, "matrix": matrix}
+    return {
+        **cdlm_response(matrix, None, None),
+        "session_id": session_id,
+        "filename": file.filename,
+        "temporary": True,
+    }
 
 
 @app.get("/api/symbols/{symbol_id}")
