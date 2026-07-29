@@ -27,6 +27,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .label-container .country-text-field{position:absolute;z-index:6;border:1px dashed #1a73e8;background:#fff;color:#222;font-family:Arial,sans-serif;line-height:1.18;padding:3px 4px;outline:none;overflow:hidden;white-space:pre-wrap;box-shadow:0 0 0 1px rgba(26,115,232,.12)}
 .label-container .country-text-field p,.label-container .country-text-field div{margin:0 0 2px}
 .label-container .country-text-field:focus{border-color:#0d47a1;background:#f7fbff}
+.label-container .reference-graphic{position:absolute;z-index:7;object-fit:fill;pointer-events:none}
 .thai-symbol-edit{position:absolute;z-index:7;border:1px dashed #1a73e8;background:#fff;color:#111;font-family:Arial,sans-serif;line-height:1.1;padding:1px 2px;outline:none;overflow:hidden;white-space:nowrap;text-align:left}
 .thai-symbol-edit:focus{border-color:#0d47a1;background:#f7fbff}
 .thai-symbol-hotspot{position:absolute;z-index:7;border:0;background:transparent;cursor:text;padding:0}
@@ -83,7 +84,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 </div>
 </div>
 <script>
-let catalog=[], blankLabels=[], currentId='', lastRender=null, cdlmSessionId='';
+let catalog=[], blankLabels=[], currentId='', lastRender=null, cdlmSessionId='', cdlmLocationHint='';
 
 async function loadCatalog(){
   try{
@@ -176,7 +177,9 @@ async function getCountryLabelText(){
   const product=document.getElementById('product').value;
   if(!country||!product)return '';
   const session=cdlmSessionId?`&session_id=${encodeURIComponent(cdlmSessionId)}`:'';
-  const r=await fetch(`/api/country-labels?country=${encodeURIComponent(country)}&product=${encodeURIComponent(product)}${session}`);
+  const selected=catalog.find(item=>item.sheet_name===currentId);
+  const location=cdlmLocationHint||(selected?.inferred_context||{}).label_type_hint||'';
+  const r=await fetch(`/api/country-labels?country=${encodeURIComponent(country)}&product=${encodeURIComponent(product)}&label_type=${encodeURIComponent(location)}${session}`);
   const data=await r.json();
   if(data.error)throw new Error(data.error);
   const printable=(data.entries||[]).filter(entry=>!entry.is_reference);
@@ -186,9 +189,9 @@ async function getCountryLabelText(){
 }
 
 async function suggestCdlmSelection(context){
-  if(!context?.country_hint||!context?.model_hint)return false;
+  if(!context?.country_hint||(!context?.product_hint&&!context?.model_hint))return false;
   const session=cdlmSessionId?`&session_id=${encodeURIComponent(cdlmSessionId)}`:'';
-  const response=await fetch(`/api/country-labels/suggest?country_hint=${encodeURIComponent(context.country_hint)}&model_hint=${encodeURIComponent(context.model_hint)}${session}`);
+  const response=await fetch(`/api/country-labels/suggest?country_hint=${encodeURIComponent(context.country_hint)}&model_hint=${encodeURIComponent(context.model_hint||'')}&product_hint=${encodeURIComponent(context.product_hint||'')}&label_type_hint=${encodeURIComponent(context.label_type_hint||'')}${session}`);
   const suggestion=await response.json();
   if(!response.ok||suggestion.error)throw new Error(suggestion.detail||suggestion.error||'Unable to map this label to CDLM.');
   const country=document.getElementById('country'),product=document.getElementById('product'),status=document.getElementById('mappingStatus');
@@ -199,8 +202,9 @@ async function suggestCdlmSelection(context){
   if(!suggestion.matched){status.textContent=suggestion.reason||'Automatic CDLM mapping is not available for this label.';return false;}
   if(![...product.options].some(option=>option.value===suggestion.product))await loadCountryLabelOptions();
   country.value=suggestion.country;product.value=suggestion.product;
+  cdlmLocationHint=suggestion.label_type||context.label_type_hint||'';
   status.textContent=`Auto-selected ${suggestion.country} and ${suggestion.product}: ${suggestion.reason}`;
-  addLog(`Auto-mapped ${context.country_hint} / ${context.model_hint} to CDLM product ${suggestion.product}.`,false,true);
+  addLog(`Auto-mapped ${context.country_hint} / ${context.product_hint||context.model_hint} to CDLM product ${suggestion.product}.`,false,true);
   return true;
 }
 
@@ -409,6 +413,10 @@ function renderLabel(data,countryText=''){
     const fontPx=Math.max(8,Math.min(18,Number(countryRegion.font_size||2.8)*SCALE));
     html+=`<div class="country-text-field" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Country-specific label text" title="Paste Word text here; bold, italic, font size, and font family are retained" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateCountryText(this)" onpaste="pasteCountryText(event)">${data._countryHtml||'<span style="color:#777">Country-specific label text</span>'}</div>`;
   }
+  (data.reference_graphics||[]).forEach(graphic=>{
+    if(!graphic.image)return;
+    html+=`<img class="reference-graphic" alt="Reference-label graphic" src="data:image/png;base64,${graphic.image}" style="left:${(graphic.x*100).toFixed(2)}%;top:${(graphic.y*100).toFixed(2)}%;width:${(graphic.w*100).toFixed(2)}%;height:${(graphic.h*100).toFixed(2)}%">`;
+  });
   const thaiSymbol=(data.symbols||[]).find(sym=>sym.code==='100183'&&sym.specification);
   const thaiRegion=data.thai_symbol_region;
   if(thaiSymbol&&thaiRegion){
@@ -493,6 +501,7 @@ async function downloadLabelPng(){
       label_image:data.label_image,
       w_mm:data.w_mm,h_mm:data.h_mm,dpi,
       symbols:data.symbols,symbol_images:data.symbol_images,
+      reference_graphics:data.reference_graphics||[],
       country_region:data.country_text_region,country_html:data._countryHtml||'',
       thai_symbol_region:data.thai_symbol_region,thai_symbol_text:data._thaiSymbolText||'',
       thai_symbol_y:data._thaiRenderedY,

@@ -272,6 +272,7 @@ class LabelExportRequest(BaseModel):
     dpi: int = Field(ge=300, le=600)
     symbols: List[Dict] = []
     symbol_images: Dict[str, str] = {}
+    reference_graphics: List[Dict] = []
     country_region: Optional[Dict] = None
     country_html: str = ""
     thai_symbol_region: Optional[Dict] = None
@@ -318,6 +319,8 @@ COUNTRY_ALIASES = {
     "Brazil": ("brazil", "brasil"),
     "Thailand": ("thailand", "thai"),
     "Philippines": ("philippines", "philippine"),
+    "Mexico": ("mexico", "méxico", "mexican"),
+    "Malaysia": ("malaysia", "malaysian"),
 }
 
 
@@ -325,8 +328,14 @@ def normalized_words(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
-def infer_label_context(text: str) -> Dict:
-    """Read country and the explicit printed model from a label drawing."""
+def infer_label_context(text: str, cdlm_products: Optional[List[str]] = None,
+                        cdlm_countries: Optional[List[str]] = None) -> Dict:
+    """Read country, label type, drawing product and model from a guide PDF.
+
+    A drawing title such as ``AV LBL 867247 Mexico box`` is more reliable than
+    an inferred model: the drawing product (867247) is a CDLM column and the
+    word ``box`` determines which CDLM location row is applicable.
+    """
     normalized = normalized_words(text)
     country_hint = None
     country_evidence = None
@@ -337,21 +346,44 @@ def infer_label_context(text: str) -> Dict:
             country_hint = country
             country_evidence = matched_alias
             break
+    if not country_hint:
+        for country in cdlm_countries or []:
+            candidate = normalized_words(str(country))
+            if candidate and re.search(rf"(?<![a-z0-9]){re.escape(candidate)}(?![a-z0-9])", normalized):
+                country_hint = str(country)
+                country_evidence = str(country)
+                break
     model_match = re.search(r"(?:modelo|model)\s*:\s*(FM\s*-?\s*\d{1,3})\b", text or "", flags=re.IGNORECASE)
     if not model_match:
         model_match = re.search(r"\b(FM\s*-?\s*\d{1,3})\b", text or "", flags=re.IGNORECASE)
     model_hint = re.sub(r"\s|-", "", model_match.group(1).upper()) if model_match else None
+    label_type_hint = None
+    if re.search(r"\bbox(?:\s+label)?\b", normalized):
+        label_type_hint = "box label"
+    elif re.search(r"\bproduct\s+label\b", normalized):
+        label_type_hint = "product label"
+    product_hint = None
+    for product in sorted(cdlm_products or [], key=lambda value: len(str(value)), reverse=True):
+        value = str(product).strip()
+        if value and re.search(rf"(?<![a-z0-9]){re.escape(value.lower())}(?![a-z0-9])", normalized):
+            product_hint = value
+            break
     return {
         "country_hint": country_hint,
         "model_hint": model_hint,
+        "product_hint": product_hint,
+        "label_type_hint": label_type_hint,
         "country_evidence": country_evidence,
         "country_source": "reference PDF text" if country_hint else None,
     }
 
 
-def suggest_cdlm_selection(matrix: Dict, country_hint: Optional[str], model_hint: Optional[str]) -> Dict:
+def suggest_cdlm_selection(matrix: Dict, country_hint: Optional[str], model_hint: Optional[str],
+                           product_hint: Optional[str] = None,
+                           label_type_hint: Optional[str] = None) -> Dict:
     """Return a CDLM selection only when the country/model match is unique."""
-    result = {"country": None, "product": None, "model": model_hint, "matched": False, "reason": None}
+    result = {"country": None, "product": None, "model": model_hint,
+              "label_type": label_type_hint, "matched": False, "reason": None}
     if not country_hint:
         result["reason"] = "No unambiguous country was found on the reference PDF."
         return result
@@ -362,13 +394,23 @@ def suggest_cdlm_selection(matrix: Dict, country_hint: Optional[str], model_hint
         result["reason"] = f"The drawing country '{country_hint}' is not present in the CDLM workbook."
         return result
     result["country"] = country
+    location_hint = normalized_words(label_type_hint)
+    entries = [entry for entry in matrix.get("entries", [])
+               if entry.get("country") == country
+               and (not location_hint or location_hint in normalized_words(entry.get("location", "")))]
+    if product_hint:
+        direct = sorted({entry["product"] for entry in entries
+                         if normalized_words(entry.get("product", "")) == normalized_words(product_hint)})
+        if len(direct) == 1:
+            result.update({"product": direct[0], "matched": True,
+                           "reason": f"Drawing product {direct[0]} maps to the {label_type_hint or 'applicable'} CDLM row."})
+            return result
     if not model_hint:
-        result["reason"] = f"Detected {country} from the reference PDF text; no model was found to auto-select a CDLM product."
+        result["reason"] = f"Detected {country} from the reference PDF text; no drawing product or model was found to auto-select a CDLM product."
         return result
     model = normalized_words(model_hint).replace(" ", "")
-    entries = [entry for entry in matrix.get("entries", [])
-               if entry.get("country") == country and "product label" in entry.get("location", "").lower()
-               and model in normalized_words(entry.get("text", "")).replace(" ", "")]
+    entries = [entry for entry in entries
+               if model in normalized_words(entry.get("text", "")).replace(" ", "")]
     products = sorted({entry["product"] for entry in entries})
     if len(products) != 1:
         result["reason"] = ("No CDLM product" if not products else "More than one CDLM product") + f" matches {model_hint} for {country}."
@@ -1094,6 +1136,7 @@ def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets,
 
     matched = []
     unmatched = []
+    reference_graphics = []
     # Score every asset/component pairing first, then accept the strongest
     # mutually unique pairs. The old asset-by-asset greedy loop made whichever
     # PNG was alphabetically first claim a component, leaving the correct
@@ -1183,6 +1226,32 @@ def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets,
             })
             log.info(f"  SKIP {asset['file']}: best={best_score:.4f}")
 
+    # Preserve small, source-only pictograms which are not yet represented by
+    # an ingested symbol PNG.  The editable CDLM text layer would otherwise
+    # paint white over them.  Large frame/artwork components are deliberately
+    # excluded, and approved PNG matches above remain the preferred path.
+    for component_index, component in enumerate(components):
+        if component_index in used_components:
+            continue
+        norm_w = float(component['w']) / bw
+        norm_h = float(component['h']) / bh
+        if not (0.004 <= norm_w <= 0.16 and 0.004 <= norm_h <= 0.16):
+            continue
+        pad = 2
+        x0 = max(0, component['x'] - pad)
+        y0 = max(0, component['y'] - pad)
+        x1 = min(bw, component['x'] + component['w'] + pad)
+        y1 = min(bh, component['y'] + component['h'] + pad)
+        encoded, graphic_png = cv2.imencode('.png', label_crop[y0:y1, x0:x1])
+        if not encoded:
+            continue
+        reference_graphics.append({
+            'x': round(float(x0) / bw, 4), 'y': round(float(y0) / bh, 4),
+            'w': round(float(x1 - x0) / bw, 4), 'h': round(float(y1 - y0) / bh, 4),
+            'image': base64.b64encode(graphic_png.tobytes()).decode(),
+            'source': 'unmatched-reference-graphic',
+        })
+
     # Text region: normalized union of text mask extent
     text_coords = np.where(text_mask > 0)
     text_region = None
@@ -1196,7 +1265,7 @@ def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets,
             'w': float(tx1 - tx0) / bw, 'h': float(ty1 - ty0) / bh
         }
 
-    return matched, unmatched, len(components), text_region
+    return matched, unmatched, len(components), text_region, reference_graphics
 
 
 def template_match_symbol(rendered_gray, symbol_asset, label_bounds_px):
@@ -1373,7 +1442,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600, label_id: Optiona
     label_image_b64 = base64.b64encode(label_png.tobytes()).decode() if encoded else None
 
     # 5. Component-based matching (text masked, graphic blobs isolated, IoU scored)
-    matched_symbols, failed_symbols, n_components, text_region = \
+    matched_symbols, failed_symbols, n_components, text_region, reference_graphics = \
         component_match_pipeline(page, label_crop, (bx, by, bw, bh), symbol_assets,
                                  w_mm=w_mm, h_mm=h_mm)
     text_elements = extract_text_elements(page, (bx, by, bw, bh), matched_symbols)
@@ -1431,6 +1500,8 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600, label_id: Optiona
         title = tm_match.group(1).strip()
 
     doc.close()
+    cdlm_matrix = load_country_label_matrix()
+    cdlm_products = cdlm_matrix.get("products", [])
 
     return {
         'id': template_id,
@@ -1441,8 +1512,9 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600, label_id: Optiona
         'text_elements': text_elements,
         'country_text_region': editable_country_region,
         'thai_symbol_region': editable_thai_symbol_region,
+        'reference_graphics': reference_graphics,
         'layout_manifest': layout_manifest,
-        'inferred_context': infer_label_context(full_text),
+        'inferred_context': infer_label_context(full_text, cdlm_products, cdlm_matrix.get("countries", [])),
         'label_image': label_image_b64,
         'debug': {
             'render_dpi': RENDER_DPI,
@@ -1454,6 +1526,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600, label_id: Optiona
             'assets_matched': n_matched,
             'graphic_components_found': n_components,
             'unmatched_assets': failed_symbols,
+            'reference_graphics_preserved': len(reference_graphics),
             'has_text_region': text_region is not None
         }
     }
@@ -1629,21 +1702,25 @@ async def api_catalog():
     }
 
 
-def cdlm_response(matrix: Dict, country: Optional[str], product: Optional[str]) -> Dict:
+def cdlm_response(matrix: Dict, country: Optional[str], product: Optional[str],
+                  label_type: Optional[str] = None) -> Dict:
     """Build the public CDLM response for bundled or temporary workbooks."""
     response = {"countries": matrix["countries"], "products": matrix["products"]}
     if country and product:
+        requested_type = normalized_words(label_type)
         response["entries"] = [
             entry for entry in matrix["entries"]
             if entry["country"] == country
             and entry["product"] == product
-            and "product label" in entry["location"].lower()
+            and (requested_type in normalized_words(entry["location"])
+                 if requested_type else "product label" in entry["location"].lower())
         ]
     return response
 
 
 @app.get("/api/country-labels/suggest")
 async def api_country_label_suggestion(country_hint: Optional[str] = None, model_hint: Optional[str] = None,
+                                       product_hint: Optional[str] = None, label_type_hint: Optional[str] = None,
                                        session_id: Optional[str] = None):
     session = _uploaded_cdlm_sessions.get(session_id or "")
     if session and time.time() - session["created_at"] <= 30 * 60:
@@ -1654,11 +1731,12 @@ async def api_country_label_suggestion(country_hint: Optional[str] = None, model
         matrix = load_country_label_matrix()
     if matrix["error"]:
         return JSONResponse(content={"error": matrix["error"]}, status_code=503)
-    return suggest_cdlm_selection(matrix, country_hint, model_hint)
+    return suggest_cdlm_selection(matrix, country_hint, model_hint, product_hint, label_type_hint)
 
 
 @app.get("/api/country-labels")
 async def api_country_labels(country: Optional[str] = None, product: Optional[str] = None,
+                             label_type: Optional[str] = None,
                              session_id: Optional[str] = None):
     """Expose CDLM options and safe product-label text for the selected pair."""
     session = _uploaded_cdlm_sessions.get(session_id or "")
@@ -1670,7 +1748,7 @@ async def api_country_labels(country: Optional[str] = None, product: Optional[st
         matrix = load_country_label_matrix()
     if matrix["error"]:
         return JSONResponse(content={"error": matrix["error"]}, status_code=503)
-    return cdlm_response(matrix, country, product)
+    return cdlm_response(matrix, country, product, label_type)
 
 
 @app.get("/api/blank-labels")
@@ -1761,6 +1839,20 @@ async def api_export_png(request: LabelExportRequest):
         # source symbol's original location.
         if request.country_region:
             render_country_html(draw, request.country_region, request.country_html, request.dpi, width, height)
+
+        for graphic in request.reference_graphics:
+            raw_graphic = graphic.get("image", "")
+            if not raw_graphic:
+                continue
+            try:
+                x = round(float(graphic.get("x", 0)) * width)
+                y = round(float(graphic.get("y", 0)) * height)
+                graphic_w = max(1, round(float(graphic.get("w", 0)) * width))
+                graphic_h = max(1, round(float(graphic.get("h", 0)) * height))
+                graphic_image = Image.open(io.BytesIO(base64.b64decode(raw_graphic, validate=True))).convert("RGB")
+                image.paste(graphic_image.resize((graphic_w, graphic_h), Image.Resampling.LANCZOS), (x, y))
+            except Exception:
+                log.warning("Skipping unreadable reference graphic during PNG export")
 
         for symbol in request.symbols:
             # 100183's generic PNG has no Thai notification number. Preserve
@@ -1907,6 +1999,7 @@ def build_generation_response(lab, assets):
         "country_text_region": sanitize(lab.get('country_text_region')),
         "country_text_source": "reference PDF text" if (lab.get('country_text_region') or {}).get('text') else None,
         "thai_symbol_region": sanitize(lab.get('thai_symbol_region')),
+        "reference_graphics": sanitize(lab.get('reference_graphics', [])),
         "layout_manifest": sanitize(lab.get('layout_manifest')),
         "inferred_context": sanitize(lab.get('inferred_context', {})),
         "label_image": lab.get('label_image'),
