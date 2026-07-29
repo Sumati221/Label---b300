@@ -209,6 +209,27 @@ def render_country_html(draw, region: Dict, html: str, dpi: int, width: int, hei
         cursor_y += int(line_height)
 
 
+def render_thai_symbol_text(draw, region: Dict, text: str, dpi: int, width: int, height: int):
+    """Replace only the variable Thai FDA notification number inside its frame."""
+    value = (text or "").strip()
+    if not value:
+        return
+    x0 = int(float(region["x"]) * width)
+    y0 = int(float(region["y"]) * height)
+    x1 = int((float(region["x"]) + float(region["w"])) * width)
+    y1 = int((float(region["y"]) + float(region["h"])) * height)
+    padding = max(2, dpi // 200)
+    draw.rectangle((x0, y0, x1, y1), fill="white")
+    max_width = max(1, x1 - x0 - 2 * padding)
+    font_size = max(6, float(region.get("font_size", 1.7)) / 25.4 * dpi)
+    font = _export_font(font_size, False, False)
+    while font_size > 6 and draw.textlength(value, font=font) > max_width:
+        font_size -= 1
+        font = _export_font(font_size, False, False)
+    text_y = y0 + max(0, ((y1 - y0) - int(font_size * 1.18)) // 2)
+    draw.text((x0 + padding, text_y), value, fill="black", font=font)
+
+
 app = FastAPI(title="B300 Label Generator v6", docs_url="/docs")
 
 _APP = Path(__file__).parent
@@ -244,6 +265,8 @@ class LabelExportRequest(BaseModel):
     symbol_images: Dict[str, str] = {}
     country_region: Optional[Dict] = None
     country_html: str = ""
+    thai_symbol_region: Optional[Dict] = None
+    thai_symbol_text: str = Field(default="", max_length=100)
 
 # Extracted from the controlled specification documents. These values are kept
 # with the app so label generation does not depend on a live AI/SQL request.
@@ -728,6 +751,23 @@ def fallback_country_text_region(matched_symbols: List[Dict]) -> Dict:
     }
 
 
+def thai_symbol_number_region(matched_symbols: List[Dict]) -> Optional[Dict]:
+    """Return the editable notification-number area within a matched Thai FDA symbol."""
+    thai = next((symbol for symbol in matched_symbols if symbol.get('code') == '100183'), None)
+    if not thai:
+        return None
+    # The logo and outer frame stay untouched.  This is only the white text
+    # bay inside the frame where the country-specific notification number sits.
+    return {
+        'x': round(float(thai['x']) + float(thai['w']) * 0.20, 4),
+        'y': round(float(thai['y']) + float(thai['h']) * 0.22, 4),
+        'w': round(float(thai['w']) * 0.60, 4),
+        'h': round(float(thai['h']) * 0.56, 4),
+        'font_size': 1.7,
+        'detected_from': 'thai-fda-symbol',
+    }
+
+
 def build_text_mask(page, label_bounds_px, render_dpi):
     """Build binary mask of text regions inside the label crop."""
     bx, by, bw, bh = label_bounds_px
@@ -1100,6 +1140,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
     ]
     if len(approved_symbols) == 1:
         approved_symbols[0]['x'] = round(editable_country_region['x'], 4)
+    editable_thai_symbol_region = thai_symbol_number_region(matched_symbols)
     n_matched = len(matched_symbols)
     log.info(f"  Result: {n_matched} matched, {len(failed_symbols)} skipped, "
              f"{n_components} components")
@@ -1120,6 +1161,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
         'text_region': text_region,
         'text_elements': text_elements,
         'country_text_region': editable_country_region,
+        'thai_symbol_region': editable_thai_symbol_region,
         'label_image': label_image_b64,
         'debug': {
             'render_dpi': RENDER_DPI,
@@ -1359,6 +1401,11 @@ async def api_export_png(request: LabelExportRequest):
 
         if request.country_region:
             render_country_html(draw, request.country_region, request.country_html, request.dpi, width, height)
+        if request.thai_symbol_region:
+            render_thai_symbol_text(
+                draw, request.thai_symbol_region, request.thai_symbol_text,
+                request.dpi, width, height
+            )
 
         output = io.BytesIO()
         image.save(output, format="PNG", dpi=(request.dpi, request.dpi), optimize=True)
@@ -1450,6 +1497,7 @@ def build_generation_response(lab, assets):
         "text_region": sanitize(lab.get('text_region')),
         "text_elements": sanitize(lab.get('text_elements', [])),
         "country_text_region": sanitize(lab.get('country_text_region')),
+        "thai_symbol_region": sanitize(lab.get('thai_symbol_region')),
         "label_image": lab.get('label_image'),
         "symbol_images": sym_images,
         "symbols_placed": len(lab['symbols']),

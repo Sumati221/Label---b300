@@ -25,6 +25,9 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .label-container .country-text-field{position:absolute;z-index:6;border:1px dashed #1a73e8;background:#fff;color:#222;font-family:Arial,sans-serif;line-height:1.18;padding:3px 4px;outline:none;overflow:hidden;white-space:pre-wrap;box-shadow:0 0 0 1px rgba(26,115,232,.12)}
 .label-container .country-text-field p,.label-container .country-text-field div{margin:0 0 2px}
 .label-container .country-text-field:focus{border-color:#0d47a1;background:#f7fbff}
+.thai-symbol-edit{position:absolute;z-index:7;border:1px dashed #1a73e8;background:#fff;color:#111;font-family:Arial,sans-serif;line-height:1.1;padding:1px 2px;outline:none;overflow:hidden;white-space:nowrap;text-align:left}
+.thai-symbol-edit:focus{border-color:#0d47a1;background:#f7fbff}
+.thai-symbol-hotspot{position:absolute;z-index:7;border:0;background:transparent;cursor:text;padding:0}
 .meta{font-size:11px;color:#666;margin-top:8px;text-align:center}
 .log{margin-top:12px;background:#f5f5f7;border-radius:6px;padding:6px;font-size:9px;font-family:monospace;max-height:140px;overflow-y:auto;line-height:1.6;color:#555}
 .toggle{display:flex;align-items:center;gap:6px;margin:8px 0;font-size:11px}
@@ -121,6 +124,15 @@ function escapeHtml(value){
 }
 
 function plainTextToHtml(value){return escapeHtml(value||'').replace(/\n/g,'<br>');}
+function startThaiSymbolEdit(){
+  if(!lastRender||!lastRender.data.thai_symbol_region)return;
+  lastRender.data._thaiSymbolEditing=true;
+  renderLabel(lastRender.data,lastRender.countryText||'');
+  document.querySelector('.thai-symbol-edit')?.focus();
+}
+function updateThaiSymbolText(element){
+  if(lastRender)lastRender.data._thaiSymbolText=(element.textContent||'').replace(/\s+/g,' ').trim();
+}
 function allowedTextStyle(element){
   const styles=[];
   const weight=element.style.fontWeight;
@@ -254,6 +266,7 @@ async function generate(){
     const countryText=await getCountryLabelText();
     const textWasPlaced=renderLabel(data,countryText);
     document.getElementById('downloadBtn').disabled=false;
+    if(data.thai_symbol_region) addLog('Click the notification number inside the Thai FDA symbol to replace it.',false);
     if(countryText&&!textWasPlaced) addLog('CDLM text was found, but this template has no detected editable text region. It was not placed automatically.',true);
     const notPresent=data.debug&&data.debug.failed_symbols?data.debug.failed_symbols.filter(f=>f.confidence===0).length:0;
     addLog(`Matched ${data.symbols_placed} symbol(s); ${notPresent} asset(s) not in this label.`,false,true);
@@ -289,6 +302,17 @@ function renderLabel(data,countryText=''){
     const fontPx=Math.max(8,Math.min(18,Number(countryRegion.font_size||2.8)*SCALE));
     html+=`<div class="country-text-field" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Country-specific label text" title="Paste Word text here; bold, italic, font size, and font family are retained" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateCountryText(this)" onpaste="pasteCountryText(event)">${data._countryHtml||'<span style="color:#777">Country-specific label text</span>'}</div>`;
   }
+  const thaiRegion=data.thai_symbol_region;
+  if(thaiRegion){
+    const tx=(thaiRegion.x*100).toFixed(2),ty=(thaiRegion.y*100).toFixed(2);
+    const tw=(thaiRegion.w*100).toFixed(2),th=(thaiRegion.h*100).toFixed(2);
+    const fontPx=Math.max(6,Number(thaiRegion.font_size||1.7)*SCALE);
+    if(data._thaiSymbolEditing||data._thaiSymbolText){
+      html+=`<div class="thai-symbol-edit" contenteditable="true" role="textbox" aria-label="Thai FDA notification number" title="Thai FDA notification number" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateThaiSymbolText(this)">${escapeHtml(data._thaiSymbolText||'')}</div>`;
+    }else{
+      html+=`<button class="thai-symbol-hotspot" type="button" aria-label="Edit Thai FDA notification number" title="Click to replace the Thai FDA notification number" onclick="startThaiSymbolEdit()" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%"></button>`;
+    }
+  }
   html+=`</div>`;
   html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
   preview.innerHTML=html;
@@ -317,7 +341,8 @@ async function downloadLabelPng(){
       label_image:data.label_image,
       w_mm:data.w_mm,h_mm:data.h_mm,dpi,
       symbols:data.symbols,symbol_images:data.symbol_images,
-      country_region:data.country_text_region,country_html:data._countryHtml||''
+      country_region:data.country_text_region,country_html:data._countryHtml||'',
+      thai_symbol_region:data.thai_symbol_region,thai_symbol_text:data._thaiSymbolText||''
     })});
     if(!response.ok)throw new Error('The PNG could not be created.');
     const blob=await response.blob();
