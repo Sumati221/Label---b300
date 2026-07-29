@@ -1247,17 +1247,39 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
     country_elements = extract_text_elements(
         page, (bx, by, bw, bh), matched_symbols, include_symbol_text=False
     )
+    printable_country_elements = [
+        element for element in country_elements if not is_branding_text(element['text'])
+    ]
     editable_country_region = country_text_region(
-        [element for element in country_elements if not is_branding_text(element['text'])]
+        printable_country_elements
     )
+    # Prefer the actual extracted text baseline. Some controlled PDFs outline
+    # their lettering, in which case inspect the rendered reference artwork.
+    source_text_bottom = max(
+        (float(element['y']) + float(element['h']) for element in printable_country_elements),
+        default=None,
+    )
+    if source_text_bottom is None:
+        source_text_bottom = detect_source_text_bottom(label_crop, matched_symbols)
     if editable_country_region is None:
         editable_country_region = fallback_country_text_region(
-            matched_symbols, detect_source_text_bottom(label_crop, matched_symbols)
+            matched_symbols, source_text_bottom
         )
 
-    # Symbol position comes from the reference label.  The matching PNG is
-    # placed at that location and only its approved specification controls
-    # size; country text never reflows a regulated symbol.
+    # Standard physical clearance: controlled symbols are placed 1 mm below
+    # the final source text line. Their PNG artwork and size still come only
+    # from the approved symbol catalog/specification.
+    controlled_symbols = [
+        symbol for symbol in matched_symbols
+        if (specification := get_symbol_specification(symbol.get('code', '')))
+        and not specification.get('metadata_only') and symbol.get('code') != '100183'
+    ]
+    if len(controlled_symbols) == 1 and source_text_bottom is not None:
+        symbol = controlled_symbols[0]
+        symbol['y'] = round(min(
+            1.0 - LABEL_EDGE_MARGIN_MM / h_mm - symbol['h'],
+            max(LABEL_EDGE_MARGIN_MM / h_mm, source_text_bottom + LABEL_EDGE_MARGIN_MM / h_mm)
+        ), 4)
     editable_thai_symbol_region = thai_symbol_number_region(matched_symbols)
     n_matched = len(matched_symbols)
     log.info(f"  Result: {n_matched} matched, {len(failed_symbols)} skipped, "
