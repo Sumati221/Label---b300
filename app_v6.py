@@ -1226,16 +1226,40 @@ def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets,
             })
             log.info(f"  SKIP {asset['file']}: best={best_score:.4f}")
 
-    # Preserve small, source-only pictograms which are not yet represented by
-    # an ingested symbol PNG.  The editable CDLM text layer would otherwise
-    # paint white over them.  Large frame/artwork components are deliberately
-    # excluded, and approved PNG matches above remain the preferred path.
+    # Preserve only genuinely source-only pictograms which are not yet
+    # represented by an ingested symbol PNG.  Segmentation can split one
+    # approved symbol into several adjacent components; preserving one of
+    # those fragments would paint a second, partial copy over the approved
+    # symbol.  Therefore a candidate must be both clearly unrelated to every
+    # library asset and at least 1 mm clear of every matched component.
+    clear_x_px = max(1, round(bw / max(w_mm, 1) * LABEL_EDGE_MARGIN_MM))
+    clear_y_px = max(1, round(bh / max(h_mm, 1) * LABEL_EDGE_MARGIN_MM))
+
+    def intersects_matched_component(component):
+        left = component['x'] - clear_x_px
+        top = component['y'] - clear_y_px
+        right = component['x'] + component['w'] + clear_x_px
+        bottom = component['y'] + component['h'] + clear_y_px
+        for matched_index in used_components:
+            matched_component = components[matched_index]
+            if (left < matched_component['x'] + matched_component['w'] + clear_x_px
+                    and right > matched_component['x'] - clear_x_px
+                    and top < matched_component['y'] + matched_component['h'] + clear_y_px
+                    and bottom > matched_component['y'] - clear_y_px):
+                return True
+        return False
+
     for component_index, component in enumerate(components):
         if component_index in used_components:
             continue
         norm_w = float(component['w']) / bw
         norm_h = float(component['h']) / bh
         if not (0.004 <= norm_w <= 0.16 and 0.004 <= norm_h <= 0.16):
+            continue
+        best_asset_score = max((row[component_index] for row in scores), default=0.0)
+        if best_asset_score >= 0.05 or intersects_matched_component(component):
+            log.info(f"  SKIP reference fragment comp[{component_index}]: "
+                     f"asset-score={best_asset_score:.3f} or adjacent to matched symbol")
             continue
         pad = 2
         x0 = max(0, component['x'] - pad)
