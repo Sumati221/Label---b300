@@ -240,7 +240,10 @@ _SYMBOL_ASSETS = _SYMBOLS / "assets"
 _LABEL_GUIDES = _APP / "data" / "label_guides"
 _CDLM = _APP / "data" / "cdlm"
 RENDER_DPI = 300  # DPI for PDF rasterization during matching
-MATCH_THRESHOLD = 0.15  # IoU-based scoring yields lower values than template correlation
+# Component IoU is deliberately conservative. A false positive must never add
+# an unrelated regulatory mark to a label simply because the asset library grew.
+MATCH_THRESHOLD = 0.22
+MATCH_UNIQUENESS_MARGIN = 0.035
 LABEL_EDGE_MARGIN_MM = 1.0  # Keep all placed symbols clear of the blank label border
 _layout_manifest_cache = None
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # Uploads are processed temporarily, never retained.
@@ -535,8 +538,13 @@ def apply_layout_manifest(label_id: str, matched_symbols: List[Dict], country_re
         country_region.update(reviewed_region)
         country_region.setdefault("text", "")
 
+    slots = manifest.get("symbols", {})
+    # A reviewed guide is authoritative: it explicitly lists the controlled
+    # artwork allowed on that label.  Do not let a weak visual match from an
+    # expanded asset library introduce a symbol not present in the guide.
+    matched_symbols[:] = [symbol for symbol in matched_symbols if str(symbol.get("code", "")) in slots]
     for symbol in matched_symbols:
-        slot = manifest.get("symbols", {}).get(str(symbol.get("code", "")))
+        slot = slots.get(str(symbol.get("code", "")))
         if not isinstance(slot, dict):
             continue
         if slot.get("x_mm") is not None:
@@ -1068,20 +1076,35 @@ def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets,
 
     matched = []
     unmatched = []
-    used = set()
-    for asset in symbol_assets:
-        best_score = 0.0
-        best_idx = -1
-        for i, comp in enumerate(components):
-            if i in used:
-                continue
-            score = match_asset_to_component(asset, comp)
-            if score > best_score:
-                best_score = score
-                best_idx = i
-        if best_score >= MATCH_THRESHOLD and best_idx >= 0:
+    # Score every asset/component pairing first, then accept the strongest
+    # mutually unique pairs. The old asset-by-asset greedy loop made whichever
+    # PNG was alphabetically first claim a component, leaving the correct
+    # symbol unavailable and producing extra marks as the library expanded.
+    scores = [[match_asset_to_component(asset, component) for component in components]
+              for asset in symbol_assets]
+    candidates = []
+    for asset_index, asset_scores in enumerate(scores):
+        for component_index, score in enumerate(asset_scores):
+            other_scores = sorted((row[component_index] for row in scores), reverse=True)
+            runner_up = other_scores[1] if len(other_scores) > 1 else 0.0
+            if score >= MATCH_THRESHOLD and score - runner_up >= MATCH_UNIQUENESS_MARGIN:
+                candidates.append((score, asset_index, component_index))
+    candidates.sort(reverse=True)
+    used_assets, used_components = set(), set()
+    accepted = {}
+    for score, asset_index, component_index in candidates:
+        if asset_index in used_assets or component_index in used_components:
+            continue
+        accepted[asset_index] = (component_index, score)
+        used_assets.add(asset_index)
+        used_components.add(component_index)
+
+    for asset_index, asset in enumerate(symbol_assets):
+        selected = accepted.get(asset_index)
+        best_score = max(scores[asset_index], default=0.0)
+        if selected:
+            best_idx, best_score = selected
             comp = components[best_idx]
-            used.add(best_idx)
             # Start with the size detected on the source label.
             norm_w = float(comp['w']) / bw
             norm_h = float(comp['h']) / bh
