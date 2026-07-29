@@ -304,6 +304,55 @@ _cache_t = 0
 _cdlm_cache = None
 _specification_cache = None
 _uploaded_cdlm_sessions: Dict[str, Dict] = {}
+
+COUNTRY_ALIASES = {
+    "Brazil": ("brazil", "brasil"),
+    "Thailand": ("thailand", "thai"),
+    "Philippines": ("philippines", "philippine"),
+}
+
+
+def normalized_words(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
+def infer_label_context(text: str) -> Dict:
+    """Read country and the explicit printed model from a label drawing."""
+    normalized = normalized_words(text)
+    country_hint = next((country for country, aliases in COUNTRY_ALIASES.items()
+                         if any(re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", normalized)
+                                for alias in aliases)), None)
+    model_match = re.search(r"(?:modelo|model)\s*:\s*(FM\s*-?\s*\d{1,3})\b", text or "", flags=re.IGNORECASE)
+    if not model_match:
+        model_match = re.search(r"\b(FM\s*-?\s*\d{1,3})\b", text or "", flags=re.IGNORECASE)
+    model_hint = re.sub(r"\s|-", "", model_match.group(1).upper()) if model_match else None
+    return {"country_hint": country_hint, "model_hint": model_hint}
+
+
+def suggest_cdlm_selection(matrix: Dict, country_hint: Optional[str], model_hint: Optional[str]) -> Dict:
+    """Return a CDLM selection only when the country/model match is unique."""
+    result = {"country": None, "product": None, "model": model_hint, "matched": False, "reason": None}
+    if not country_hint or not model_hint:
+        result["reason"] = "No unambiguous country and model were found on the drawing."
+        return result
+    hint_words = normalized_words(country_hint)
+    country = next((value for value in matrix.get("countries", [])
+                    if hint_words == normalized_words(value) or hint_words in COUNTRY_ALIASES.get(value, ())), None)
+    if not country:
+        result["reason"] = f"The drawing country '{country_hint}' is not present in the CDLM workbook."
+        return result
+    model = normalized_words(model_hint).replace(" ", "")
+    entries = [entry for entry in matrix.get("entries", [])
+               if entry.get("country") == country and "product label" in entry.get("location", "").lower()
+               and model in normalized_words(entry.get("text", "")).replace(" ", "")]
+    products = sorted({entry["product"] for entry in entries})
+    result["country"] = country
+    if len(products) != 1:
+        result["reason"] = ("No CDLM product" if not products else "More than one CDLM product") + f" matches {model_hint} for {country}."
+        return result
+    result.update({"product": products[0], "matched": True,
+                   "reason": f"Drawing model {model_hint} maps to CDLM product {products[0]}."})
+    return result
 _blank_label_cache = None
 
 
@@ -1231,6 +1280,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
         'text_elements': text_elements,
         'country_text_region': editable_country_region,
         'thai_symbol_region': editable_thai_symbol_region,
+        'inferred_context': infer_label_context(full_text),
         'label_image': label_image_b64,
         'debug': {
             'render_dpi': RENDER_DPI,
@@ -1405,7 +1455,8 @@ async def api_catalog():
             'product_desc': lab['title'],
             'label_size': f"{lab['h_mm']} X {lab['w_mm']} mm",
             'sheet_name': lab['id'],
-            'symbol_count': len(lab['symbols'])
+            'symbol_count': len(lab['symbols']),
+            'inferred_context': lab.get('inferred_context', {})
         } for lab in c['labels']],
         "count": len(c['labels'])
     }
@@ -1422,6 +1473,21 @@ def cdlm_response(matrix: Dict, country: Optional[str], product: Optional[str]) 
             and "product label" in entry["location"].lower()
         ]
     return response
+
+
+@app.get("/api/country-labels/suggest")
+async def api_country_label_suggestion(country_hint: Optional[str] = None, model_hint: Optional[str] = None,
+                                       session_id: Optional[str] = None):
+    session = _uploaded_cdlm_sessions.get(session_id or "")
+    if session and time.time() - session["created_at"] <= 30 * 60:
+        matrix = session["matrix"]
+    elif session_id:
+        return JSONResponse(content={"error": "The uploaded CDLM workbook session has expired. Upload it again."}, status_code=410)
+    else:
+        matrix = load_country_label_matrix()
+    if matrix["error"]:
+        return JSONResponse(content={"error": matrix["error"]}, status_code=503)
+    return suggest_cdlm_selection(matrix, country_hint, model_hint)
 
 
 @app.get("/api/country-labels")
@@ -1657,6 +1723,7 @@ def build_generation_response(lab, assets):
         "text_elements": sanitize(lab.get('text_elements', [])),
         "country_text_region": sanitize(lab.get('country_text_region')),
         "thai_symbol_region": sanitize(lab.get('thai_symbol_region')),
+        "inferred_context": sanitize(lab.get('inferred_context', {})),
         "label_image": lab.get('label_image'),
         "symbol_images": sym_images,
         "symbols_placed": len(lab['symbols']),
