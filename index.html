@@ -63,6 +63,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 <select id="country"><option value="">-- Select country (optional) --</option></select>
 <label for="product">CDLM product</label>
 <select id="product"><option value="">-- Select product (optional) --</option></select>
+<div id="mappingStatus" style="font-size:10px;color:#666;margin-top:4px"></div>
 <select id="dpi"><option value="300">300 DPI</option><option value="600" selected>600 DPI</option></select>
 
 <button class="btn" id="genBtn" onclick="generate()" disabled>Generate Label</button>
@@ -175,6 +176,28 @@ async function getCountryLabelText(){
   const references=(data.entries||[]).filter(entry=>entry.is_reference);
   if(references.length) addLog(`CDLM references ${references.map(entry=>entry.text).join(', ')}; no unverified reference text was inserted.`,false);
   return printable.map(entry=>entry.text).join('\n\n');
+}
+
+async function suggestCdlmSelection(context){
+  if(!context?.country_hint||!context?.model_hint)return false;
+  const session=cdlmSessionId?`&session_id=${encodeURIComponent(cdlmSessionId)}`:'';
+  const response=await fetch(`/api/country-labels/suggest?country_hint=${encodeURIComponent(context.country_hint)}&model_hint=${encodeURIComponent(context.model_hint)}${session}`);
+  const suggestion=await response.json();
+  if(!response.ok||suggestion.error)throw new Error(suggestion.detail||suggestion.error||'Unable to map this label to CDLM.');
+  const status=document.getElementById('mappingStatus');
+  if(!suggestion.matched){
+    status.textContent=suggestion.reason||'Automatic CDLM mapping is not available for this label.';
+    return false;
+  }
+  const country=document.getElementById('country'),product=document.getElementById('product');
+  if(![...country.options].some(option=>option.value===suggestion.country)||![...product.options].some(option=>option.value===suggestion.product)){
+    await loadCountryLabelOptions();
+  }
+  country.value=suggestion.country;
+  product.value=suggestion.product;
+  status.textContent=`Auto-selected ${suggestion.country} and ${suggestion.product}: ${suggestion.reason}`;
+  addLog(`Auto-mapped ${context.country_hint} / ${context.model_hint} to CDLM product ${suggestion.product}.`,false,true);
+  return true;
 }
 
 function escapeHtml(value){
@@ -323,6 +346,7 @@ async function generate(){
         data.failed_symbols.forEach(f=>{h+=`<li><b>${f.asset}</b>: ${f.reason} (conf:${(f.confidence||0).toFixed(3)})</li>`;});
         h+='</ul>';}
       h+='</div>';preview.innerHTML=h;addLog(data.error,true);return;}
+    await suggestCdlmSelection(data.inferred_context||{});
     const countryText=await getCountryLabelText();
     const textWasPlaced=renderLabel(data,countryText);
     document.getElementById('downloadBtn').disabled=false;
