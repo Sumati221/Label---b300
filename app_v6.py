@@ -236,6 +236,9 @@ app = FastAPI(title="B300 Label Generator v6", docs_url="/docs")
 
 _APP = Path(__file__).parent
 _SYMBOLS = _APP / "data" / "symbols"
+_SYMBOL_ASSETS = _SYMBOLS / "assets"
+_LABEL_GUIDES = _APP / "data" / "label_guides"
+_CDLM = _APP / "data" / "cdlm"
 RENDER_DPI = 300  # DPI for PDF rasterization during matching
 MATCH_THRESHOLD = 0.15  # IoU-based scoring yields lower values than template correlation
 LABEL_EDGE_MARGIN_MM = 1.0  # Keep all placed symbols clear of the blank label border
@@ -434,10 +437,15 @@ def encode_image_b64(img_rgba: np.ndarray) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
+def normalize_symbol_id(symbol_id: str) -> str:
+    """Normalize numeric and alphanumeric controlled symbol identifiers."""
+    return re.sub(r"[^A-Za-z0-9]", "", str(symbol_id)).upper()
+
+
 def get_symbol_specification(symbol_id: str) -> Optional[Dict]:
     """Return approved ingested metadata for a symbol ID, if it exists."""
     global _specification_cache
-    normalized_id = re.sub(r"\D", "", str(symbol_id))
+    normalized_id = normalize_symbol_id(symbol_id)
     if _specification_cache is None:
         catalog_path = _SYMBOLS / "symbol_specifications.json"
         catalog = {}
@@ -448,7 +456,7 @@ def get_symbol_specification(symbol_id: str) -> Optional[Dict]:
                 if not isinstance(record, dict) or not record.get("symbol_id"):
                     continue
                 if record.get("approved", True):
-                    catalog[re.sub(r"\D", "", str(record["symbol_id"]))] = record
+                    catalog[normalize_symbol_id(record["symbol_id"])] = record
         except (OSError, ValueError, TypeError) as exc:
             log.warning("Unable to load ingested symbol catalog: %s", exc)
         # Keep the packaged controls available until an approved ingestion
@@ -593,9 +601,12 @@ def load_country_label_matrix() -> Dict:
     if not HAS_OPENPYXL:
         _cdlm_cache = {"countries": [], "products": [], "entries": [], "error": "The CDLM reader dependency is unavailable."}
         return _cdlm_cache
-    files = sorted(_SYMBOLS.glob("LS-200004_CDLM_Avalon_Family_RevP*.xlsx"))
+    files = sorted(_CDLM.glob("LS-200004_CDLM_Avalon_Family_Rev*.xlsx"), reverse=True)
     if not files:
-        _cdlm_cache = {"countries": [], "products": [], "entries": [], "error": "No CDLM workbook was found in data/symbols."}
+        # Backwards-compatible fallback for the originally bundled workbook.
+        files = sorted(_SYMBOLS.glob("LS-200004_CDLM_Avalon_Family_Rev*.xlsx"), reverse=True)
+    if not files:
+        _cdlm_cache = {"countries": [], "products": [], "entries": [], "error": "No CDLM workbook was found in the ingested data folders."}
         return _cdlm_cache
     source = next((f for f in files if " (" not in f.name), files[0])
     workbook = None
@@ -611,23 +622,32 @@ def load_country_label_matrix() -> Dict:
 def scan_symbol_assets():
     """Find all PNG/SVG symbol files. Pre-encode to base64 for fast responses."""
     assets = []
-    sdir = str(_SYMBOLS)
-    if not os.path.isdir(sdir):
-        log.warning(f"Symbols dir not found: {sdir}")
-        return assets
-    for f in sorted(os.listdir(sdir)):
-        low = f.lower()
-        if not (low.endswith('.png') or low.endswith('.svg') or low.endswith('.jpg')):
+    asset_roots = [_SYMBOL_ASSETS, _SYMBOLS]
+    source_files = []
+    for root in asset_roots:
+        if not root.is_dir():
             continue
-        path = os.path.join(sdir, f)
+        source_files.extend(sorted(path for path in root.glob('*') if path.suffix.lower() in {'.png', '.svg', '.jpg', '.jpeg'}))
+    if not source_files:
+        log.warning("No symbol asset files found in %s or %s", _SYMBOL_ASSETS, _SYMBOLS)
+        return assets
+    loaded_codes = set()
+    for source in source_files:
+        f = source.name
+        low = f.lower()
+        code_m = re.match(r'([A-Za-z0-9]+)(?=[_-]|$)', f)
+        code = normalize_symbol_id(code_m.group(1) if code_m else source.stem)
+        # assets/ is authoritative; avoid loading the legacy top-level copy.
+        if code in loaded_codes:
+            continue
+        path = str(source)
         img = load_symbol_as_image(path)
         if img is None:
             continue
-        code_m = re.match(r'(\d+)', f)
         # Pre-encode to base64 so we never need to serialize numpy later
         b64 = encode_image_b64(img)
         assets.append({
-            'code': code_m.group(1) if code_m else os.path.splitext(f)[0],
+            'code': code,
             'file': f,
             'path': path,
             'image': img,          # numpy array for template matching
@@ -636,6 +656,7 @@ def scan_symbol_assets():
             'w': int(img.shape[1]),
             'is_svg': low.endswith('.svg')
         })
+        loaded_codes.add(code)
         log.info(f"  Loaded: {f} ({img.shape[1]}x{img.shape[0]}, b64={len(b64)} chars)")
     # Prefer SVG over PNG for same code
     seen_codes = {}
@@ -1509,13 +1530,18 @@ def load_catalog():
     log.info(f"Symbol assets: {[a['file'] for a in assets]}")
 
     labels = []
-    sdir = str(_SYMBOLS)
-    if os.path.isdir(sdir):
-        for f in sorted(os.listdir(sdir)):
-            if f.lower().endswith('.pdf') and 'mart' in f.lower():
-                result = process_pdf_label(os.path.join(sdir, f), assets)
-                if result:
-                    labels.append(result)
+    label_files = []
+    for root in [_LABEL_GUIDES, _SYMBOLS]:
+        if root.is_dir():
+            label_files.extend(sorted(path for path in root.glob('*.pdf') if 'mart' in path.name.lower()))
+    seen_guides = set()
+    for guide in label_files:
+        if guide.name in seen_guides:
+            continue
+        seen_guides.add(guide.name)
+        result = process_pdf_label(str(guide), assets)
+        if result:
+            labels.append(result)
 
     _cache = {'labels': labels, 'assets': assets}
     _cache_t = now

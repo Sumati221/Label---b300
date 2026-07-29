@@ -1,0 +1,94 @@
+{
+  "source": "/tmp/label-b300-ingest/extracted",
+  "assets": {
+    "copied": [
+      "005016_600dpi.png",
+      "005335_600dpi.png",
+      "015336_600dpi.png",
+      "035576_600dpi.png",
+      "065576_600dpi.png",
+      "082794_600dpi.png",
+      "0A6049_600dpi.png",
+      "0F6049-600dpi.png",
+      "100006_600dpi.png",
+      "100012_600dpi.png",
+      "100025_600dpi.png",
+      "100029-600dpi.png",
+      "100036-600dpi.png",
+      "100070_600dpi.png",
+      "100183-600dpi.png",
+      "100185_600dpi.png",
+      "100192-600dpi.png",
+      "100206-600dpi.png",
+      "100207-600dpi.png",
+      "100218_600dpi.png",
+      "100232_600dpi.png",
+      "100235_600dpi.png",
+      "100236_600dpi.png",
+      "100241-600dpi.png",
+      "100242-600dpi.png",
+      "100243-600dpi.png",
+      "100244-600dpi.png",
+      "100245-600dpi.png",
+      "100246_600dpi.png",
+      "100255_600dpi.png",
+      "100258_600dpi.png",
+      "100260_600dpi.png"
+    ],
+    "skipped": [],
+    "total": 32
+  },
+  "specifications": {
+    "copied": [
+      "LS-005016.docx",
+      "LS-015336.docx",
+      "LS-035576.docx",
+      "LS-065576.docx",
+      "LS-082794.docx",
+      "LS-0F6049.docx",
+      "LS-100006_SPEC.docx",
+      "LS-100029.docx",
+      "LS-100036.docx",
+      "LS-100183.docx",
+      "LS-100185.docx",
+      "LS-100192.docx",
+      "LS-100206.docx",
+      "LS-100207.docx",
+      "LS-100218_SPEC.docx",
+      "LS-100232.docx",
+      "LS-100235.docx",
+      "LS-100236.docx",
+      "LS-100241.docx",
+      "LS-100242.docx",
+      "LS-100243.docx",
+      "LS-100244.docx",
+      "LS-100245.docx",
+      "LS-100246.docx",
+      "LS-100255.docx",
+      "LS-100258.docx",
+      "LS-100260.docx",
+      "LS_005335.docx",
+      "LS_0A6049_SPEC.docx",
+      "LS_100025_SPEC.docx",
+      "LS_100070_SPEC.docx"
+    ],
+    "skipped": []
+  },
+  "label_guides": {
+    "copied": [
+      "453665020541-M-MART_2303.pdf",
+      "453665084031-M-MART_2331.pdf",
+      "453665188971-M-MART_2611.pdf",
+      "453665211541-M-MART_2610.pdf"
+    ],
+    "skipped": []
+  },
+  "cdlm": {
+    "copied": [
+      "LS-200004_CDLM_Avalon_Family_RevU.xlsx"
+    ],
+    "skipped": []
+  },
+  "catalog_symbol_count": 32,
+  "review_note": "Records without an explicit source size remain layout-review-required; no artwork pixel size is treated as a regulatory size."
+}
