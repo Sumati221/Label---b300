@@ -761,7 +761,11 @@ def is_branding_text(text: str) -> bool:
 
 def detect_source_text_bottom(label_crop: np.ndarray, matched_symbols: List[Dict]) -> Optional[float]:
     """Estimate the lowest outlined/source text line above the first symbol."""
-    approved = [symbol for symbol in matched_symbols if get_symbol_specification(symbol.get('code', ''))]
+    approved = [
+        symbol for symbol in matched_symbols
+        if (specification := get_symbol_specification(symbol.get('code', '')))
+        and not specification.get('metadata_only')
+    ]
     if not approved or label_crop is None:
         return None
     first_symbol_y = min(float(symbol.get('source_y', symbol['y'])) for symbol in approved)
