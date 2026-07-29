@@ -1479,7 +1479,11 @@ async def api_catalog():
             'product_desc': lab['title'],
             'label_size': f"{lab['h_mm']} X {lab['w_mm']} mm",
             'sheet_name': lab['id'],
-            'symbol_count': len(lab['symbols'])
+            'symbol_count': len(lab['symbols']),
+            # Catalog labels have already been read once, so expose only the
+            # small, explainable country/model hints needed for immediate CDLM
+            # preselection (no label text or artwork is sent here).
+            'inferred_context': lab.get('inferred_context', {})
         } for lab in c['labels']],
         "count": len(c['labels'])
     }

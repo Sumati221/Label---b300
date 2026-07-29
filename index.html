@@ -155,6 +155,7 @@ async function uploadCdlmWorkbook(){
     if(!response.ok||data.error)throw new Error(data.detail||data.error||'Unable to read this CDLM workbook.');
     cdlmSessionId=data.session_id;
     await loadCountryLabelOptions();
+    await autoMapCurrentLabel();
     status.textContent=`Using ${data.filename}: ${data.countries.length} countries and ${data.products.length} products. Temporary for 30 minutes.`;
     addLog(`Loaded temporary CDLM workbook: ${data.filename}`,false,true);
   }catch(error){
@@ -162,6 +163,12 @@ async function uploadCdlmWorkbook(){
     status.textContent='Could not load the uploaded CDLM workbook. The bundled workbook remains active.';
     addLog(error.message,true);
   }
+}
+
+async function autoMapCurrentLabel(){
+  const selected=catalog.find(item=>item.sheet_name===currentId);
+  if(!selected)return false;
+  return suggestCdlmSelection(selected.inferred_context||{});
 }
 
 async function getCountryLabelText(){
@@ -302,7 +309,7 @@ function pasteCountryText(event){
   updateCountryText(event.currentTarget);
 }
 
-function onSelect(){
+async function onSelect(){
   currentId=document.getElementById('sel').value;
   if(currentId) document.getElementById('pdfUpload').value='';
   document.getElementById('genBtn').disabled=!currentId;
@@ -310,6 +317,9 @@ function onSelect(){
     const p=catalog.find(x=>x.sheet_name===currentId);
     if(p) document.getElementById('info').innerHTML=
       `<b>Product:</b> ${p.product_code}<br><b>Size:</b> ${p.label_size}<br><b>Symbols detected:</b> ${p.symbol_count}`;
+    await autoMapCurrentLabel();
+  }else{
+    document.getElementById('mappingStatus').textContent='';
   }
 }
 
