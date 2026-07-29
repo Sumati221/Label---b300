@@ -17,9 +17,10 @@ import time
 import tempfile
 from pathlib import Path
 from typing import List, Dict, Optional
+from html.parser import HTMLParser
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 try:
     from openpyxl import load_workbook
@@ -47,7 +48,7 @@ except (ImportError, OSError):
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
-from fastapi.responses import HTMLResponse, Response, JSONResponse
+from fastapi.responses import HTMLResponse, Response, JSONResponse, StreamingResponse
 import json
 
 logging.basicConfig(level=logging.INFO)
@@ -104,6 +105,103 @@ def unwrap_ai_extract_values(value):
     return value
 
 
+class CountryHtmlParser(HTMLParser):
+    """Small, safe rich-text subset used by the downloadable label renderer."""
+    def __init__(self):
+        super().__init__()
+        self.lines = [[]]
+        self.styles = [{"bold": False, "italic": False, "size": None}]
+
+    def _style_from_attrs(self, attrs):
+        style = dict(self.styles[-1])
+        css = dict(attrs).get("style", "")
+        for item in css.split(";"):
+            key, _, value = item.partition(":")
+            key, value = key.strip().lower(), value.strip().lower()
+            if key == "font-weight" and (value == "bold" or value.isdigit() and int(value) >= 600):
+                style["bold"] = True
+            elif key == "font-style" and value == "italic":
+                style["italic"] = True
+            elif key == "font-size" and re.fullmatch(r"[0-9.]+(?:pt|px)", value):
+                style["size"] = value
+        return style
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag == "br":
+            self.lines.append([])
+            return
+        if tag in {"div", "p"} and self.lines[-1]:
+            self.lines.append([])
+        style = self._style_from_attrs(attrs)
+        if tag in {"b", "strong"}:
+            style["bold"] = True
+        if tag in {"i", "em"}:
+            style["italic"] = True
+        self.styles.append(style)
+
+    def handle_endtag(self, tag):
+        if tag.lower() in {"div", "p"} and self.lines[-1]:
+            self.lines.append([])
+        if len(self.styles) > 1:
+            self.styles.pop()
+
+    def handle_data(self, data):
+        if data:
+            self.lines[-1].append((data, dict(self.styles[-1])))
+
+
+def _export_font(size_px: float, bold: bool, italic: bool):
+    suffix = "BoldOblique" if bold and italic else "Bold" if bold else "Oblique" if italic else ""
+    filename = f"DejaVuSans{('-' + suffix) if suffix else ''}.ttf"
+    for directory in ("/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/dejavu"):
+        path = Path(directory) / filename
+        if path.exists():
+            return ImageFont.truetype(str(path), max(6, round(size_px)))
+    return ImageFont.load_default()
+
+
+def render_country_html(draw, region: Dict, html: str, dpi: int, width: int, height: int):
+    """Render the editor's safe rich-text subset into its physical label area."""
+    x0 = int(float(region.get("x", 0)) * width)
+    y0 = int(float(region.get("y", 0)) * height)
+    x1 = int((float(region.get("x", 0)) + float(region.get("w", 1))) * width)
+    y1 = int((float(region.get("y", 0)) + float(region.get("h", 1))) * height)
+    draw.rectangle((x0, y0, x1, y1), fill="white")
+    parser = CountryHtmlParser()
+    parser.feed(html or "")
+    default_size = max(8, float(region.get("font_size", 2.8)) / 25.4 * dpi)
+    cursor_y, padding, available_width = y0 + max(3, dpi // 150), max(3, dpi // 150), max(1, x1 - x0 - 2 * max(3, dpi // 150))
+
+    for line in parser.lines:
+        if cursor_y >= y1 - padding:
+            break
+        cursor_x, line_height = x0 + padding, default_size * 1.18
+        for text, style in line:
+            chunks = re.split(r"(\s+)", text)
+            raw_size = style.get("size")
+            if raw_size and raw_size.endswith("pt"):
+                font_size = float(raw_size[:-2]) / 72 * dpi
+            elif raw_size and raw_size.endswith("px"):
+                font_size = float(raw_size[:-2]) / 96 * dpi
+            else:
+                font_size = default_size
+            font = _export_font(font_size, style.get("bold", False), style.get("italic", False))
+            line_height = max(line_height, font_size * 1.18)
+            for chunk in chunks:
+                if not chunk:
+                    continue
+                chunk_width = draw.textlength(chunk, font=font)
+                if not chunk.isspace() and cursor_x > x0 + padding and cursor_x + chunk_width > x0 + padding + available_width:
+                    cursor_x = x0 + padding
+                    cursor_y += int(line_height)
+                    if cursor_y >= y1 - padding:
+                        return
+                draw.text((cursor_x, cursor_y), chunk, fill="black", font=font)
+                cursor_x += chunk_width
+        cursor_y += int(line_height)
+
+
 app = FastAPI(title="B300 Label Generator v6", docs_url="/docs")
 
 _APP = Path(__file__).parent
@@ -127,6 +225,18 @@ AI_EDIT_SCHEMA = {
 
 class EditRequest(BaseModel):
     command: str = Field(min_length=1, max_length=2000)
+
+
+class LabelExportRequest(BaseModel):
+    label_id: str = "label"
+    label_image: str
+    w_mm: float = Field(gt=0, le=200)
+    h_mm: float = Field(gt=0, le=200)
+    dpi: int = Field(ge=300, le=600)
+    symbols: List[Dict] = []
+    symbol_images: Dict[str, str] = {}
+    country_region: Optional[Dict] = None
+    country_html: str = ""
 
 # Extracted from the controlled specification documents. These values are kept
 # with the app so label generation does not depend on a live AI/SQL request.
@@ -1196,6 +1306,50 @@ async def api_symbol_specification(symbol_id: str):
     if not specification:
         raise HTTPException(404, f"No specification found for symbol {symbol_id}")
     return specification
+
+
+@app.post("/api/export-png")
+async def api_export_png(request: LabelExportRequest):
+    """Build a physical-size PNG server-side; avoids browser SVG limitations."""
+    try:
+        width = round(request.w_mm / 25.4 * request.dpi)
+        height = round(request.h_mm / 25.4 * request.dpi)
+        source = base64.b64decode(request.label_image, validate=True)
+        image = Image.open(io.BytesIO(source)).convert("RGB").resize(
+            (width, height), Image.Resampling.LANCZOS
+        )
+        draw = ImageDraw.Draw(image)
+
+        for symbol in request.symbols:
+            if not symbol.get("specification"):
+                continue
+            raw_asset = request.symbol_images.get(symbol.get("asset", ""))
+            if not raw_asset:
+                continue
+            x = round(float(symbol.get("x", 0)) * width)
+            y = round(float(symbol.get("y", 0)) * height)
+            symbol_w = max(1, round(float(symbol.get("w", 0)) * width))
+            symbol_h = max(1, round(float(symbol.get("h", 0)) * height))
+            asset = Image.open(io.BytesIO(base64.b64decode(raw_asset, validate=True))).convert("RGBA")
+            asset = asset.resize((symbol_w, symbol_h), Image.Resampling.LANCZOS)
+            draw.rectangle((x, y, x + symbol_w, y + symbol_h), fill="white")
+            image.paste(asset, (x, y), asset)
+
+        if request.country_region:
+            render_country_html(draw, request.country_region, request.country_html, request.dpi, width, height)
+
+        output = io.BytesIO()
+        image.save(output, format="PNG", dpi=(request.dpi, request.dpi), optimize=True)
+        output.seek(0)
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", request.label_id or "label")
+        return StreamingResponse(
+            output,
+            media_type="image/png",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}-{request.dpi}dpi.png"'},
+        )
+    except Exception as exc:
+        log.error("PNG export failed: %s", exc, exc_info=True)
+        raise HTTPException(422, "Unable to create the PNG export.")
 
 
 @app.post("/api/interpret-edit")

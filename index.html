@@ -291,45 +291,28 @@ function fitCountryText(){
   }
 }
 async function downloadLabelPng(){
-  const label=document.querySelector('.label-container');
-  if(!label||!lastRender)return;
+  if(!lastRender)return;
   const dpi=Number(document.getElementById('dpi').value);
-  const width=Math.round(lastRender.data.w_mm/25.4*dpi);
-  const height=Math.round(lastRender.data.h_mm/25.4*dpi);
-  const previewWidth=label.getBoundingClientRect().width;
-  const scale=width/previewWidth;
-  const clone=label.cloneNode(true);
-  clone.style.width=`${width}px`;clone.style.height=`${height}px`;
-  clone.style.border=`${Math.max(1,2*scale)}px solid #1a73e8`;
-  clone.style.borderRadius=`${4*scale}px`;
-  clone.querySelectorAll('[contenteditable]').forEach(field=>{
-    field.removeAttribute('contenteditable');
-    field.style.overflow='hidden';
-    field.style.border='0';
-    field.style.boxShadow='none';
-    field.style.background='#fff';
-    const size=parseFloat(field.style.fontSize||'10');
-    if(size)field.style.fontSize=`${size*scale}px`;
-  });
-  const exportCss=`*{box-sizing:border-box}.label-container{position:relative;background:#fff;overflow:hidden}.template-base{position:absolute;inset:0;width:100%;height:100%;object-fit:fill}.controlled-symbol{position:absolute;background:#fff;z-index:5}.controlled-symbol img{width:100%;height:100%;object-fit:fill;display:block}.country-text-field{position:absolute;z-index:6;color:#222;font-family:Arial,sans-serif;line-height:1.18;padding:${3*scale}px ${4*scale}px;white-space:pre-wrap;overflow:hidden}.country-text-field p,.country-text-field div{margin:0 0 ${2*scale}px}.country-text-field strong{font-weight:bold}.country-text-field em{font-style:italic}`;
-  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>${exportCss}</style>${clone.outerHTML}</div></foreignObject></svg>`;
-  const image=new Image();
-  image.onload=()=>{
-    const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
-    const context=canvas.getContext('2d');context.drawImage(image,0,0,width,height);
-    canvas.toBlob(blob=>{
-      if(!blob){addLog('PNG export failed. Please try again.',true);return;}
-      const link=document.createElement('a');
-      link.href=URL.createObjectURL(blob);
-      link.download=`${lastRender.data.label_id||'label'}-${dpi}dpi.png`;
-      link.style.display='none';document.body.appendChild(link);link.click();link.remove();
-      setTimeout(()=>URL.revokeObjectURL(link.href),1000);
-    },'image/png');
-    URL.revokeObjectURL(svgUrl);
-  };
-  image.onerror=()=>{URL.revokeObjectURL(svgUrl);addLog('PNG export could not render in this browser.',true);};
-  const svgUrl=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml;charset=utf-8'}));
-  image.src=svgUrl;
+  const button=document.getElementById('downloadBtn');
+  button.disabled=true;button.textContent='Preparing PNG...';
+  try{
+    const data=lastRender.data;
+    const response=await fetch('/api/export-png',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      label_id:data.label_id,
+      label_image:data.label_image,
+      w_mm:data.w_mm,h_mm:data.h_mm,dpi,
+      symbols:data.symbols,symbol_images:data.symbol_images,
+      country_region:data.country_text_region,country_html:data._countryHtml||''
+    })});
+    if(!response.ok)throw new Error('The PNG could not be created.');
+    const blob=await response.blob();
+    const link=document.createElement('a');
+    link.href=URL.createObjectURL(blob);
+    link.download=`${data.label_id||'label'}-${dpi}dpi.png`;
+    link.style.display='none';document.body.appendChild(link);link.click();link.remove();
+    setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+  }catch(error){addLog(error.message,true);}
+  finally{button.disabled=false;button.textContent='Download Label PNG';}
 }
 function addLog(msg,err=false,ok=false){
   const b=document.getElementById('logBox');
