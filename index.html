@@ -18,6 +18,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .btn:hover:not(:disabled){background:#093080}
 .preview{flex:1;overflow:auto;padding:20px;display:flex;flex-direction:column;align-items:center;background:#fafbfc}
 .label-container{position:relative;border:2px solid #1a73e8;border-radius:4px;box-shadow:0 2px 12px rgba(0,0,0,.1);background:#fff}
+.label-container .blank-label-border{position:absolute;inset:0;border:1px solid #222;pointer-events:none;z-index:1}
 .label-container .template-base{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}
 .label-container img.symbol{position:absolute;pointer-events:none}
 .controlled-symbol{position:absolute;z-index:8;background:#fff;pointer-events:none}
@@ -373,16 +374,24 @@ function renderLabel(data,countryText=''){
   const hPx=data.h_mm*SCALE;
   let html=`<div class="label-container" style="width:${wPx}px;height:${hPx}px;">`;
   const hasTemplateArtwork=Boolean(data.label_image);
-  if(hasTemplateArtwork){
+  const cleanRender=Boolean(data.layout_manifest&&data.layout_manifest.blank_label&&data.layout_manifest.blank_label.clean_render);
+  if(cleanRender){
+    const radius=Number(data.layout_manifest.blank_label.corner_radius_mm||0)*SCALE;
+    html+=`<div class="blank-label-border" style="border-radius:${radius}px"></div>`;
+  }else if(hasTemplateArtwork){
     html+=`<img class="template-base" alt="Source label artwork" src="data:image/png;base64,${data.label_image}">`;
   }
   // The reference PDF supplies the controlled layout.  Cover each reference
   // symbol and repaint it with the approved symbol asset at the same position.
   // The Thai FDA asset is a generic outline. Its required notification number
   // belongs to the reference drawing, so keep that complete source artwork.
-  (data.symbols||[]).filter(sym=>sym.specification&&sym.code!=='100183'&&!sym.specification.metadata_only).slice().sort((a,b)=>a.y-b.y||a.x-b.x).forEach(sym=>{
+  (data.symbols||[]).filter(sym=>cleanRender||sym.specification&&sym.code!=='100183'&&!sym.specification.metadata_only).slice().sort((a,b)=>a.y-b.y||a.x-b.x).forEach(sym=>{
     const imgData=(data.symbol_images||{})[sym.asset];
     if(!imgData)return;
+    if(cleanRender){
+      html+=`<div class="controlled-symbol" data-controlled-asset="${escapeHtml(sym.asset)}" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Matched symbol ${escapeHtml(sym.code||'')}" src="data:image/png;base64,${imgData}"></div>`;
+      return;
+    }
     const sourceX=Number(sym.source_x??sym.x),sourceY=Number(sym.source_y??sym.y);
     const sourceW=Number(sym.source_w??sym.w),sourceH=Number(sym.source_h??sym.h);
     const maskPad=0.007;
@@ -398,6 +407,16 @@ function renderLabel(data,countryText=''){
   const thaiSymbol=(data.symbols||[]).find(sym=>sym.code==='100183'&&sym.specification);
   const thaiRegion=data.thai_symbol_region;
   if(thaiSymbol&&thaiRegion){
+    if(cleanRender){
+      const tx=(thaiRegion.x*100).toFixed(2),ty=(thaiRegion.y*100).toFixed(2);
+      const tw=(thaiRegion.w*100).toFixed(2),th=(thaiRegion.h*100).toFixed(2);
+      const fontPx=Math.max(6,Number(thaiRegion.font_size||1.7)*SCALE);
+      if(data._thaiSymbolEditing||data._thaiSymbolText){
+        html+=`<div class="thai-symbol-edit" contenteditable="true" role="textbox" aria-label="Thai FDA notification number" title="Thai FDA notification number" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateThaiSymbolText(this)">${escapeHtml(data._thaiSymbolText||'')}</div>`;
+      }else{
+        html+=`<button class="thai-symbol-hotspot" type="button" aria-label="Edit Thai FDA notification number" title="Click to replace the Thai FDA notification number" onclick="startThaiSymbolEdit()" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%"></button>`;
+      }
+    }else{
     const renderedThaiY=Number.isFinite(data._thaiRenderedY)?data._thaiRenderedY:thaiSymbol.y;
     const numberOffset=thaiRegion.y-thaiSymbol.y;
     const sourceX=(thaiSymbol.x*100).toFixed(2),sourceY=(thaiSymbol.y*100).toFixed(2);
@@ -414,6 +433,7 @@ function renderLabel(data,countryText=''){
       html+=`<div class="thai-symbol-edit" data-thai-offset="${numberOffset}" contenteditable="true" role="textbox" aria-label="Thai FDA notification number" title="Thai FDA notification number" style="left:${tx}%;top:${editableTop}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateThaiSymbolText(this)">${escapeHtml(data._thaiSymbolText||'')}</div>`;
     }else{
       html+=`<button class="thai-symbol-hotspot" data-thai-offset="${numberOffset}" type="button" aria-label="Edit Thai FDA notification number" title="Click to replace the Thai FDA notification number" onclick="startThaiSymbolEdit()" style="left:${tx}%;top:${editableTop}%;width:${tw}%;height:${th}%"></button>`;
+    }
     }
   }
   html+=`</div>`;
@@ -470,7 +490,8 @@ async function downloadLabelPng(){
       symbols:data.symbols,symbol_images:data.symbol_images,
       country_region:data.country_text_region,country_html:data._countryHtml||'',
       thai_symbol_region:data.thai_symbol_region,thai_symbol_text:data._thaiSymbolText||'',
-      thai_symbol_y:data._thaiRenderedY
+      thai_symbol_y:data._thaiRenderedY,
+      layout_manifest:data.layout_manifest
     })});
     if(!response.ok)throw new Error('The PNG could not be created.');
     const blob=await response.blob();

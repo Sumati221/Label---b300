@@ -271,6 +271,7 @@ class LabelExportRequest(BaseModel):
     thai_symbol_region: Optional[Dict] = None
     thai_symbol_text: str = Field(default="", max_length=100)
     thai_symbol_y: Optional[float] = Field(default=None, ge=0, le=1)
+    layout_manifest: Optional[Dict] = None
 
 # Extracted from the controlled specification documents. These values are kept
 # with the app so label generation does not depend on a live AI/SQL request.
@@ -532,6 +533,7 @@ def apply_layout_manifest(label_id: str, matched_symbols: List[Dict], country_re
         "status": "reviewed",
         "reference_pdf": manifest.get("reference_pdf"),
         "label_size_mm": manifest.get("label_size_mm"),
+        "blank_label": manifest.get("blank_label", {}),
     }
 
 
@@ -1648,12 +1650,27 @@ async def api_export_png(request: LabelExportRequest):
     try:
         width = round(request.w_mm / 25.4 * request.dpi)
         height = round(request.h_mm / 25.4 * request.dpi)
-        source = base64.b64decode(request.label_image, validate=True)
-        image = Image.open(io.BytesIO(source)).convert("RGB").resize(
-            (width, height), Image.Resampling.LANCZOS
-        )
+        blank_label = (request.layout_manifest or {}).get("blank_label", {})
+        clean_render = bool(blank_label.get("clean_render"))
+        if clean_render:
+            image = Image.new("RGB", (width, height), "white")
+        else:
+            source = base64.b64decode(request.label_image, validate=True)
+            image = Image.open(io.BytesIO(source)).convert("RGB").resize(
+                (width, height), Image.Resampling.LANCZOS
+            )
         native_template = image.copy()
         draw = ImageDraw.Draw(image)
+
+        if clean_render:
+            radius = max(0, round(float(blank_label.get("corner_radius_mm", 0)) / 25.4 * request.dpi))
+            border = max(1, round(0.25 / 25.4 * request.dpi))
+            draw.rounded_rectangle(
+                (border // 2, border // 2, width - 1 - border // 2, height - 1 - border // 2),
+                radius=radius,
+                outline="black",
+                width=border,
+            )
 
         # First replace the source country text.  Controlled symbols are
         # painted afterwards: their approved artwork must remain whole even
@@ -1666,7 +1683,7 @@ async def api_export_png(request: LabelExportRequest):
             # 100183's generic PNG has no Thai notification number. Preserve
             # the complete, numbered symbol already present in the reference
             # label image rather than replacing it with an incomplete asset.
-            if (not symbol.get("specification") or symbol.get("code") == "100183"
+            if not clean_render and (not symbol.get("specification") or symbol.get("code") == "100183"
                     or symbol["specification"].get("metadata_only")):
                 continue
             raw_asset = request.symbol_images.get(symbol.get("asset", ""))
@@ -1678,21 +1695,22 @@ async def api_export_png(request: LabelExportRequest):
             symbol_h = max(1, round(float(symbol.get("h", 0)) * height))
             asset = Image.open(io.BytesIO(base64.b64decode(raw_asset, validate=True))).convert("RGBA")
             asset = asset.resize((symbol_w, symbol_h), Image.Resampling.LANCZOS)
-            # Clear the original detected artwork (with a small bleed margin)
-            # before drawing at its controlled/reflowed position.
-            source_x = round(float(symbol.get("source_x", symbol.get("x", 0))) * width)
-            source_y = round(float(symbol.get("source_y", symbol.get("y", 0))) * height)
-            source_w = max(1, round(float(symbol.get("source_w", symbol.get("w", 0))) * width))
-            source_h = max(1, round(float(symbol.get("source_h", symbol.get("h", 0))) * height))
-            mask_pad = max(2, round(request.dpi / 40))
-            draw.rectangle((source_x - mask_pad, source_y - mask_pad,
-                            source_x + source_w + mask_pad, source_y + source_h + mask_pad), fill="white")
+            if not clean_render:
+                # Clear the original detected artwork (with a small bleed
+                # margin) before drawing at its controlled/reflowed position.
+                source_x = round(float(symbol.get("source_x", symbol.get("x", 0))) * width)
+                source_y = round(float(symbol.get("source_y", symbol.get("y", 0))) * height)
+                source_w = max(1, round(float(symbol.get("source_w", symbol.get("w", 0))) * width))
+                source_h = max(1, round(float(symbol.get("source_h", symbol.get("h", 0))) * height))
+                mask_pad = max(2, round(request.dpi / 40))
+                draw.rectangle((source_x - mask_pad, source_y - mask_pad,
+                                source_x + source_w + mask_pad, source_y + source_h + mask_pad), fill="white")
             draw.rectangle((x, y, x + symbol_w, y + symbol_h), fill="white")
             image.paste(asset, (x, y), asset)
 
         thai_symbol = next((symbol for symbol in request.symbols if symbol.get("code") == "100183"), None)
         thai_y = None
-        if thai_symbol and request.thai_symbol_y is not None:
+        if not clean_render and thai_symbol and request.thai_symbol_y is not None:
             original_x = round(float(thai_symbol.get("x", 0)) * width)
             original_y = round(float(thai_symbol.get("y", 0)) * height)
             symbol_w = max(1, round(float(thai_symbol.get("w", 0)) * width))
