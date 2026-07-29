@@ -1,0 +1,30 @@
+{
+  "symbols": [
+    {
+      "symbol_id": "100025",
+      "symbol_name": "INMETRO Brazilian National Institute of Metrology symbol",
+      "reference": "INMETRO Ordinance 54/2016",
+      "required_width_mm": 20.0,
+      "minimum_size_mm": null,
+      "size_specification": "Width 20 mm.",
+      "applicable_for": "Product",
+      "color_specification": null,
+      "usage_notes": "Required symbol; no required combination with other symbols.",
+      "source_document": "LS_100025_SPEC.docx",
+      "approved": true
+    },
+    {
+      "symbol_id": "100183",
+      "symbol_name": "Thai FDA logo",
+      "reference": "Thailand Ministry of Public Health, Volume 137, Special Section 260, November 5, 2020",
+      "required_width_mm": null,
+      "minimum_size_mm": 5.0,
+      "size_specification": "Minimum size 5 mm; text within the symbol must remain legible.",
+      "applicable_for": "Product and packaging of medical devices sold in Thailand",
+      "color_specification": "Not specified internally or by regulation.",
+      "usage_notes": "Must contain the license number, detailed notification number, or notification receipt number in Arabic numerals within the Thai FDA logo frame.",
+      "source_document": "LS-100183.docx",
+      "approved": true
+    }
+  ]
+}

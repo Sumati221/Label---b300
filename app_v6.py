@@ -301,6 +301,7 @@ SYMBOL_SPECIFICATIONS = {
 _cache = None
 _cache_t = 0
 _cdlm_cache = None
+_specification_cache = None
 
 
 # ════════════════════════════════════════════════════════════
@@ -379,9 +380,26 @@ def encode_image_b64(img_rgba: np.ndarray) -> str:
 
 
 def get_symbol_specification(symbol_id: str) -> Optional[Dict]:
-    """Return controlled metadata for a symbol ID, if a specification exists."""
+    """Return approved ingested metadata for a symbol ID, if it exists."""
+    global _specification_cache
     normalized_id = re.sub(r"\D", "", str(symbol_id))
-    specification = SYMBOL_SPECIFICATIONS.get(normalized_id)
+    if _specification_cache is None:
+        catalog_path = _SYMBOLS / "symbol_specifications.json"
+        catalog = {}
+        try:
+            raw_catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+            records = raw_catalog.get("symbols", raw_catalog) if isinstance(raw_catalog, dict) else raw_catalog
+            for record in records:
+                if not isinstance(record, dict) or not record.get("symbol_id"):
+                    continue
+                if record.get("approved", True):
+                    catalog[re.sub(r"\D", "", str(record["symbol_id"]))] = record
+        except (OSError, ValueError, TypeError) as exc:
+            log.warning("Unable to load ingested symbol catalog: %s", exc)
+        # Keep the packaged controls available until an approved ingestion
+        # catalog is supplied. Ingested records take precedence over defaults.
+        _specification_cache = {**SYMBOL_SPECIFICATIONS, **catalog}
+    specification = _specification_cache.get(normalized_id)
     return dict(specification) if specification else None
 
 
