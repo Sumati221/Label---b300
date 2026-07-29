@@ -854,7 +854,8 @@ def fallback_country_text_region(matched_symbols: List[Dict], source_text_bottom
     """
     approved_symbols = [
         symbol for symbol in matched_symbols
-        if get_symbol_specification(symbol.get('code', '')) is not None
+        if (specification := get_symbol_specification(symbol.get('code', '')))
+        and not specification.get('metadata_only')
     ]
     symbol_top = min((symbol['y'] for symbol in approved_symbols), default=0.76)
     # Thai labels begin with the country-specific importer line.  Brazilian
@@ -1271,7 +1272,8 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
     # rather than the intended layout guide.
     approved_symbols = [
         symbol for symbol in matched_symbols
-        if get_symbol_specification(symbol.get('code', '')) is not None
+        if (specification := get_symbol_specification(symbol.get('code', '')))
+        and not specification.get('metadata_only')
     ]
     if len(approved_symbols) == 1:
         approved_symbols[0]['x'] = round(editable_country_region['x'], 4)
