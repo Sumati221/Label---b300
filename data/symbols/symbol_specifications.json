@@ -1,6 +1,22 @@
 {
   "symbols": [
     {
+      "symbol_id": "100012",
+      "symbol_name": "Philips wordmark",
+      "reference": "Philips brand guidelines, March 2014",
+      "required_width_mm": null,
+      "minimum_size_mm": 15.0,
+      "minimum_size_pixels": 100,
+      "font_size_pt": 8,
+      "font_type": "Philips",
+      "color_specification": "Philips Blue (Pantone 300 C)",
+      "applicable_for": "Everything",
+      "usage_notes": "Use the approved artwork. The source label artwork is preserved because it carries the proprietary Philips wordmark and colour treatment.",
+      "source_document": "LS-100012_B.pdf",
+      "metadata_only": true,
+      "approved": true
+    },
+    {
       "symbol_id": "100025",
       "symbol_name": "INMETRO Brazilian National Institute of Metrology symbol",
       "reference": "INMETRO Ordinance 54/2016",

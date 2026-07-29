@@ -57,6 +57,8 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 <label for="cdlmUpload" style="display:block;font-size:11px;font-weight:600">Upload CDLM workbook (optional)</label>
 <input id="cdlmUpload" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="uploadCdlmWorkbook()">
 <div id="cdlmUploadStatus" style="font-size:10px;color:#666;margin-top:4px">Uses the bundled CDLM workbook by default. Uploads are temporary for this browser session.</div>
+<label for="blankLabel">Blank label stock (optional)</label>
+<select id="blankLabel"><option value="">-- Select blank label stock --</option></select>
 <label for="country">Country label text</label>
 <select id="country"><option value="">-- Select country (optional) --</option></select>
 <label for="product">CDLM product</label>
@@ -79,7 +81,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 </div>
 </div>
 <script>
-let catalog=[], currentId='', lastRender=null, cdlmSessionId='';
+let catalog=[], blankLabels=[], currentId='', lastRender=null, cdlmSessionId='';
 
 async function loadCatalog(){
   try{
@@ -96,7 +98,33 @@ async function loadCatalog(){
     });
     if(!catalog.length) s.innerHTML='<option>No labels found</option>';
     loadCountryLabelOptions();
+    loadBlankLabelOptions();
   }catch(e){addLog('Catalog error: '+e.message,true)}
+}
+
+async function loadBlankLabelOptions(){
+  try{
+    const response=await fetch('/api/blank-labels');
+    const data=await response.json();
+    if(data.error)throw new Error(data.error);
+    blankLabels=data.labels||[];
+    const select=document.getElementById('blankLabel');
+    select.innerHTML='<option value="">-- Select blank label stock --</option>';
+    blankLabels.forEach(item=>{
+      const text=`${item.size} | PN ${item.part_number} | ${item.material}`;
+      select.add(new Option(text,item.part_number));
+    });
+  }catch(error){addLog('Blank-label catalog unavailable: '+error.message,true);}
+}
+function validateBlankLabel(data){
+  const partNumber=document.getElementById('blankLabel').value;
+  if(!partNumber)return;
+  const blank=blankLabels.find(item=>item.part_number===partNumber);
+  if(!blank)return;
+  const sameSize=(Number(blank.width_mm)===Number(data.w_mm)&&Number(blank.height_mm)===Number(data.h_mm))||
+    (Number(blank.width_mm)===Number(data.h_mm)&&Number(blank.height_mm)===Number(data.w_mm));
+  if(sameSize)addLog(`Blank stock validated: PN ${blank.part_number}, ${blank.size}, ${blank.material}.`,false,true);
+  else addLog(`Blank stock PN ${blank.part_number} is ${blank.size}; this label is ${data.w_mm} × ${data.h_mm} mm.`,true);
 }
 
 async function loadCountryLabelOptions(){
@@ -298,6 +326,7 @@ async function generate(){
     const countryText=await getCountryLabelText();
     const textWasPlaced=renderLabel(data,countryText);
     document.getElementById('downloadBtn').disabled=false;
+    validateBlankLabel(data);
     if(data.thai_symbol_region) addLog('Click the notification number inside the Thai FDA symbol to replace it.',false);
     if(countryText&&!textWasPlaced) addLog('CDLM text was found, but this template has no detected editable text region. It was not placed automatically.',true);
     const notPresent=data.debug&&data.debug.failed_symbols?data.debug.failed_symbols.filter(f=>f.confidence===0).length:0;
@@ -323,7 +352,7 @@ function renderLabel(data,countryText=''){
   // symbol and repaint it with the approved symbol asset at the same position.
   // The Thai FDA asset is a generic outline. Its required notification number
   // belongs to the reference drawing, so keep that complete source artwork.
-  (data.symbols||[]).filter(sym=>sym.specification&&sym.code!=='100183').slice().sort((a,b)=>a.y-b.y||a.x-b.x).forEach(sym=>{
+  (data.symbols||[]).filter(sym=>sym.specification&&sym.code!=='100183'&&!sym.specification.metadata_only).slice().sort((a,b)=>a.y-b.y||a.x-b.x).forEach(sym=>{
     const imgData=(data.symbol_images||{})[sym.asset];
     if(!imgData)return;
     const sourceX=Number(sym.source_x??sym.x),sourceY=Number(sym.source_y??sym.y);

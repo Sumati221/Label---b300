@@ -304,6 +304,7 @@ _cache_t = 0
 _cdlm_cache = None
 _specification_cache = None
 _uploaded_cdlm_sessions: Dict[str, Dict] = {}
+_blank_label_cache = None
 
 
 # ════════════════════════════════════════════════════════════
@@ -415,6 +416,21 @@ def attach_symbol_specifications(symbols: List[Dict]) -> List[Dict]:
             item["specification"] = specification
         enriched.append(item)
     return enriched
+
+
+def load_blank_label_catalog() -> Dict:
+    """Load the reviewed blank-label stock catalog extracted from the workbook."""
+    global _blank_label_cache
+    if _blank_label_cache is not None:
+        return _blank_label_cache
+    try:
+        data = json.loads((_SYMBOLS / "blank_label_catalog.json").read_text(encoding="utf-8"))
+        labels = [item for item in data.get("labels", []) if item.get("part_number")]
+        _blank_label_cache = {"labels": labels, "error": None}
+    except (OSError, ValueError, TypeError) as error:
+        log.warning("Blank-label catalog unavailable: %s", error)
+        _blank_label_cache = {"labels": [], "error": "Blank-label catalog is unavailable."}
+    return _blank_label_cache
 
 
 def parse_country_label_workbook(workbook) -> Dict:
@@ -928,12 +944,12 @@ def component_match_pipeline(page, label_crop, label_bounds_px, symbol_assets,
 
             # Apply only a specification that explicitly controls size.
             specification = get_symbol_specification(asset['code'])
-            if specification and specification.get('required_width_mm'):
+            if specification and not specification.get('metadata_only') and specification.get('required_width_mm'):
                 sym_w_mm = specification['required_width_mm']
                 sym_h_mm = sym_w_mm / (asset['w'] / max(asset['h'], 1))
                 norm_w = sym_w_mm / w_mm
                 norm_h = sym_h_mm / h_mm
-            elif specification and specification.get('minimum_size_mm'):
+            elif specification and not specification.get('metadata_only') and specification.get('minimum_size_mm'):
                 min_size_mm = specification['minimum_size_mm']
                 detected_max_mm = max(sym_w_mm, sym_h_mm)
                 if detected_max_mm < min_size_mm:
@@ -1433,6 +1449,15 @@ async def api_country_labels(country: Optional[str] = None, product: Optional[st
     return cdlm_response(matrix, country, product)
 
 
+@app.get("/api/blank-labels")
+async def api_blank_labels():
+    """Expose reviewed blank-label size and material records for validation."""
+    catalog = load_blank_label_catalog()
+    if catalog["error"]:
+        return JSONResponse(content={"error": catalog["error"]}, status_code=503)
+    return catalog
+
+
 @app.post("/api/country-labels/upload")
 async def api_upload_country_labels(file: UploadFile = File(...)):
     """Parse an uploaded CDLM XLSX in memory for this browser session only."""
@@ -1495,7 +1520,8 @@ async def api_export_png(request: LabelExportRequest):
             # 100183's generic PNG has no Thai notification number. Preserve
             # the complete, numbered symbol already present in the reference
             # label image rather than replacing it with an incomplete asset.
-            if not symbol.get("specification") or symbol.get("code") == "100183":
+            if (not symbol.get("specification") or symbol.get("code") == "100183"
+                    or symbol["specification"].get("metadata_only")):
                 continue
             raw_asset = request.symbol_images.get(symbol.get("asset", ""))
             if not raw_asset:
