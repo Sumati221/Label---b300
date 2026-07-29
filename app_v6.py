@@ -1520,6 +1520,13 @@ async def api_export_png(request: LabelExportRequest):
         native_template = image.copy()
         draw = ImageDraw.Draw(image)
 
+        # First replace the source country text.  Controlled symbols are
+        # painted afterwards: their approved artwork must remain whole even
+        # when a deliberately generous editable text region crosses the
+        # source symbol's original location.
+        if request.country_region:
+            render_country_html(draw, request.country_region, request.country_html, request.dpi, width, height)
+
         for symbol in request.symbols:
             # 100183's generic PNG has no Thai notification number. Preserve
             # the complete, numbered symbol already present in the reference
@@ -1547,9 +1554,6 @@ async def api_export_png(request: LabelExportRequest):
                             source_x + source_w + mask_pad, source_y + source_h + mask_pad), fill="white")
             draw.rectangle((x, y, x + symbol_w, y + symbol_h), fill="white")
             image.paste(asset, (x, y), asset)
-
-        if request.country_region:
-            render_country_html(draw, request.country_region, request.country_html, request.dpi, width, height)
 
         thai_symbol = next((symbol for symbol in request.symbols if symbol.get("code") == "100183"), None)
         thai_y = None
