@@ -281,7 +281,7 @@ function rtfToHtml(rtf){
 }
 function updateCountryText(element){
   if(lastRender)lastRender.data._countryHtml=sanitizeCountryHtml(element.innerHTML);
-  requestAnimationFrame(fitCountryText);
+  requestAnimationFrame(()=>{fitCountryText();syncTextSymbolClearance();});
 }
 function formatCountryText(command){
   const field=document.querySelector('.country-text-field');
@@ -419,8 +419,29 @@ function renderLabel(data,countryText=''){
   html+=`</div>`;
   html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
   preview.innerHTML=html;
-  requestAnimationFrame(fitCountryText);
+  requestAnimationFrame(()=>{fitCountryText();syncTextSymbolClearance();});
   return Boolean(countryText&&countryRegion);
+}
+function renderedCountryTextBottom(field){
+  const range=document.createRange();
+  range.selectNodeContents(field);
+  const rects=[...range.getClientRects()];
+  return rects.length?Math.max(...rects.map(rect=>rect.bottom)):field.getBoundingClientRect().top;
+}
+function syncTextSymbolClearance(){
+  if(!lastRender)return;
+  const data=lastRender.data;
+  const field=document.querySelector('.country-text-field');
+  const label=document.querySelector('.label-container');
+  if(!field||!label||(field.innerText||'').trim()==='Country-specific label text')return;
+  const symbols=(data.symbols||[]).filter(symbol=>symbol.specification&&!symbol.specification.metadata_only&&symbol.code!=='100183');
+  if(symbols.length!==1)return;
+  const symbol=symbols[0];
+  const gapPx=label.clientHeight/Number(data.h_mm); // exactly 1 mm
+  const newTop=Math.min(1-symbol.h-(1/Number(data.h_mm)),Math.max(0,
+    (renderedCountryTextBottom(field)-label.getBoundingClientRect().top+gapPx)/label.clientHeight));
+  symbol.y=newTop;
+  document.querySelector(`[data-controlled-asset="${CSS.escape(symbol.asset)}"]`)?.style.setProperty('top',`${(newTop*100).toFixed(2)}%`);
 }
 function fitCountryText(){
   const field=document.querySelector('.country-text-field');
