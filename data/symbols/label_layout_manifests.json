@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "description": "Reviewed, physical layout slots derived from the controlled reference drawings. Coordinates are normalized to the 85 x 50 mm label, with sizes in millimetres where specified.",
+  "layouts": {
+    "453665084031-M-MART_2331": {
+      "status": "reviewed",
+      "reference_pdf": "453665084031-M-MART_2331.pdf",
+      "label_size_mm": {"width": 85, "height": 50},
+      "country_text_region": {"x": 0.0647, "y": 0.195, "w": 0.84, "h": 0.30, "font_size": 1.6, "line_height": 1.10, "detected_from": "reviewed-layout-manifest"},
+      "symbols": {"100025": {"x_mm": 5.5, "y_mm": 29.5, "width_mm": 20.0, "source": "LS-100025 specification / reference drawing"}}
+    },
+    "453665020541-M-MART_2303": {
+      "status": "reviewed",
+      "reference_pdf": "453665020541-M-MART_2303.pdf",
+      "label_size_mm": {"width": 85, "height": 50},
+      "country_text_region": {"x": 0.0647, "y": 0.08, "w": 0.84, "h": 0.54, "font_size": 1.6, "line_height": 1.12, "detected_from": "reviewed-layout-manifest"},
+      "symbols": {"100183": {"x_mm": 5.5, "y_mm": 37.0, "source": "reference drawing; native symbol artwork is retained"}}
+    }
+  }
+}

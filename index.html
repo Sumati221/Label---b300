@@ -431,6 +431,9 @@ function renderedCountryTextBottom(field){
 function syncTextSymbolClearance(){
   if(!lastRender)return;
   const data=lastRender.data;
+  // Reviewed templates use their reference-PDF geometry. Browser text metrics
+  // must not reflow an approved symbol away from its manifest position.
+  if(data.layout_manifest&&data.layout_manifest.status==='reviewed')return;
   const field=document.querySelector('.country-text-field');
   const label=document.querySelector('.label-container');
   if(!field||!label||(field.innerText||'').trim()==='Country-specific label text')return;

@@ -177,12 +177,13 @@ def render_country_html(draw, region: Dict, html: str, dpi: int, width: int, hei
     parser = CountryHtmlParser()
     parser.feed(html or "")
     default_size = max(8, float(region.get("font_size", 2.8)) / 25.4 * dpi)
+    line_height_factor = float(region.get("line_height", 1.18))
     cursor_y, padding, available_width = y0 + max(3, dpi // 150), max(3, dpi // 150), max(1, x1 - x0 - 2 * max(3, dpi // 150))
 
     for line in parser.lines:
         if cursor_y >= y1 - padding:
             break
-        cursor_x, line_height = x0 + padding, default_size * 1.18
+        cursor_x, line_height = x0 + padding, default_size * line_height_factor
         for text, style in line:
             chunks = re.split(r"(\s+)", text)
             raw_size = style.get("size")
@@ -193,7 +194,7 @@ def render_country_html(draw, region: Dict, html: str, dpi: int, width: int, hei
             else:
                 font_size = default_size
             font = _export_font(font_size, style.get("bold", False), style.get("italic", False))
-            line_height = max(line_height, font_size * 1.18)
+            line_height = max(line_height, font_size * line_height_factor)
             for chunk in chunks:
                 if not chunk:
                     continue
@@ -238,6 +239,7 @@ _SYMBOLS = _APP / "data" / "symbols"
 RENDER_DPI = 300  # DPI for PDF rasterization during matching
 MATCH_THRESHOLD = 0.15  # IoU-based scoring yields lower values than template correlation
 LABEL_EDGE_MARGIN_MM = 1.0  # Keep all placed symbols clear of the blank label border
+_layout_manifest_cache = None
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # Uploads are processed temporarily, never retained.
 
 # This schema turns a human edit request into a bounded operation.  The client
@@ -480,6 +482,57 @@ def load_blank_label_catalog() -> Dict:
         log.warning("Blank-label catalog unavailable: %s", error)
         _blank_label_cache = {"labels": [], "error": "Blank-label catalog is unavailable."}
     return _blank_label_cache
+
+
+def load_layout_manifests() -> Dict:
+    """Load reviewed physical layout slots for controlled reference labels."""
+    global _layout_manifest_cache
+    if _layout_manifest_cache is not None:
+        return _layout_manifest_cache
+    try:
+        raw = json.loads((_SYMBOLS / "label_layout_manifests.json").read_text(encoding="utf-8"))
+        layouts = raw.get("layouts", {}) if isinstance(raw, dict) else {}
+        _layout_manifest_cache = layouts if isinstance(layouts, dict) else {}
+    except (OSError, ValueError, TypeError) as error:
+        log.warning("Layout manifests unavailable: %s", error)
+        _layout_manifest_cache = {}
+    return _layout_manifest_cache
+
+
+def apply_layout_manifest(label_id: str, matched_symbols: List[Dict], country_region: Optional[Dict],
+                          w_mm: float, h_mm: float) -> Optional[Dict]:
+    """Apply a reviewed layout manifest without reflowing the reference design."""
+    manifest = load_layout_manifests().get(label_id)
+    if not manifest or manifest.get("status") != "reviewed":
+        return None
+
+    reviewed_region = manifest.get("country_text_region")
+    if isinstance(reviewed_region, dict) and country_region is not None:
+        country_region.clear()
+        country_region.update(reviewed_region)
+        country_region.setdefault("text", "")
+
+    for symbol in matched_symbols:
+        slot = manifest.get("symbols", {}).get(str(symbol.get("code", "")))
+        if not isinstance(slot, dict):
+            continue
+        if slot.get("x_mm") is not None:
+            symbol["x"] = round(float(slot["x_mm"]) / w_mm, 4)
+        if slot.get("y_mm") is not None:
+            symbol["y"] = round(float(slot["y_mm"]) / h_mm, 4)
+        if slot.get("width_mm") is not None:
+            prior_w = float(symbol.get("w", 0))
+            prior_h = float(symbol.get("h", 0))
+            symbol["w"] = round(float(slot["width_mm"]) / w_mm, 4)
+            if prior_w > 0 and prior_h > 0:
+                symbol["h"] = round(symbol["w"] * prior_h / prior_w, 4)
+        symbol["layout_source"] = "reviewed-layout-manifest"
+
+    return {
+        "status": "reviewed",
+        "reference_pdf": manifest.get("reference_pdf"),
+        "label_size_mm": manifest.get("label_size_mm"),
+    }
 
 
 def parse_country_label_workbook(workbook) -> Dict:
@@ -1154,7 +1207,7 @@ def template_match_symbol(rendered_gray, symbol_asset, label_bounds_px):
 MIN_SYMBOL_SIZE = 0.02  # reject matches < 2% of label dimension
 
 
-def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
+def process_pdf_label(pdf_path, symbol_assets, output_dpi=600, label_id: Optional[str] = None):
     """
     Crop-first pipeline:
     1. Rasterize full PDF page
@@ -1266,9 +1319,9 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
             matched_symbols, source_text_bottom
         )
 
-    # Standard physical clearance: controlled symbols are placed 1 mm below
-    # the final source text line. Their PNG artwork and size still come only
-    # from the approved symbol catalog/specification.
+    # Fallback only for templates that do not yet have a reviewed layout
+    # manifest. Controlled existing labels use their manifest immediately
+    # after this compatibility path.
     controlled_symbols = [
         symbol for symbol in matched_symbols
         if (specification := get_symbol_specification(symbol.get('code', '')))
@@ -1280,6 +1333,12 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
             1.0 - LABEL_EDGE_MARGIN_MM / h_mm - symbol['h'],
             max(LABEL_EDGE_MARGIN_MM / h_mm, source_text_bottom + LABEL_EDGE_MARGIN_MM / h_mm)
         ), 4)
+    template_id = label_id or fname.replace('.pdf', '')
+    layout_manifest = apply_layout_manifest(
+        template_id, matched_symbols, editable_country_region, w_mm, h_mm
+    )
+    if layout_manifest:
+        log.info("  Applied reviewed layout manifest for %s", fname)
     editable_thai_symbol_region = thai_symbol_number_region(matched_symbols)
     n_matched = len(matched_symbols)
     log.info(f"  Result: {n_matched} matched, {len(failed_symbols)} skipped, "
@@ -1294,7 +1353,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
     doc.close()
 
     return {
-        'id': fname.replace('.pdf', ''),
+        'id': template_id,
         'title': title,
         'w_mm': w_mm, 'h_mm': h_mm,
         'symbols': matched_symbols,
@@ -1302,6 +1361,7 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
         'text_elements': text_elements,
         'country_text_region': editable_country_region,
         'thai_symbol_region': editable_thai_symbol_region,
+        'layout_manifest': layout_manifest,
         'inferred_context': infer_label_context(full_text),
         'label_image': label_image_b64,
         'debug': {
@@ -1745,6 +1805,7 @@ def build_generation_response(lab, assets):
         "text_elements": sanitize(lab.get('text_elements', [])),
         "country_text_region": sanitize(lab.get('country_text_region')),
         "thai_symbol_region": sanitize(lab.get('thai_symbol_region')),
+        "layout_manifest": sanitize(lab.get('layout_manifest')),
         "inferred_context": sanitize(lab.get('inferred_context', {})),
         "label_image": lab.get('label_image'),
         "symbol_images": sym_images,
@@ -1793,14 +1854,13 @@ async def api_generate_upload(file: UploadFile = File(...), dpi: int = 600):
                 raise HTTPException(400, "The uploaded file is not a valid PDF.")
 
         assets = scan_symbol_assets()
-        lab = process_pdf_label(temp_path, assets)
+        lab = process_pdf_label(temp_path, assets, label_id=Path(filename).stem)
         if not lab:
             return JSONResponse(content={
                 "error": "No usable label boundary or content was found in this PDF."
             }, status_code=422)
 
         # Keep the original drawing name in the response; the temporary path is never exposed.
-        lab['id'] = Path(filename).stem
         lab['title'] = Path(filename).stem
         return build_generation_response(lab, assets)
     except HTTPException:
