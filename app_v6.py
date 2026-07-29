@@ -304,66 +304,6 @@ _cache_t = 0
 _cdlm_cache = None
 _specification_cache = None
 _uploaded_cdlm_sessions: Dict[str, Dict] = {}
-
-# Country names in a drawing are not always written exactly as they are in the
-# CDLM workbook. Keep this small, explicit alias list so automatic selection is
-# explainable and never depends on a fuzzy country guess.
-COUNTRY_ALIASES = {
-    "Brazil": ("brazil", "brasil"),
-    "Thailand": ("thailand", "thai"),
-    "Philippines": ("philippines", "philippine"),
-}
-
-
-def normalized_words(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
-
-
-def infer_label_context(text: str) -> Dict:
-    """Extract auditable country/model clues from the drawing text."""
-    normalized = normalized_words(text)
-    country_hint = None
-    for country, aliases in COUNTRY_ALIASES.items():
-        if any(re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", normalized) for alias in aliases):
-            country_hint = country
-            break
-    # A drawing title can describe a product family (for example FM30) while
-    # the actual printed label states a different model. Prefer that explicit
-    # label field, then fall back to a standalone FM token only if absent.
-    model_match = re.search(r"(?:modelo|model)\s*:\s*(FM\s*-?\s*\d{1,3})\b", text or "", flags=re.IGNORECASE)
-    if not model_match:
-        model_match = re.search(r"\b(FM\s*-?\s*\d{1,3})\b", text or "", flags=re.IGNORECASE)
-    model_hint = re.sub(r"\s|-", "", model_match.group(1).upper()) if model_match else None
-    return {"country_hint": country_hint, "model_hint": model_hint}
-
-
-def suggest_cdlm_selection(matrix: Dict, country_hint: Optional[str], model_hint: Optional[str]) -> Dict:
-    """Map drawing clues to a unique CDLM country/product pair, if one exists."""
-    result = {"country": None, "product": None, "model": model_hint, "matched": False, "reason": None}
-    if not country_hint or not model_hint:
-        result["reason"] = "No unambiguous country and model were found on the drawing."
-        return result
-    hint_words = normalized_words(country_hint)
-    country = next((value for value in matrix.get("countries", [])
-                    if hint_words == normalized_words(value)
-                    or hint_words in COUNTRY_ALIASES.get(value, ())), None)
-    if not country:
-        result["reason"] = f"The drawing country '{country_hint}' is not present in the CDLM workbook."
-        return result
-    model = normalized_words(model_hint).replace(" ", "")
-    entries = [entry for entry in matrix.get("entries", [])
-               if entry.get("country") == country
-               and "product label" in entry.get("location", "").lower()
-               and model in normalized_words(entry.get("text", "")).replace(" ", "")]
-    products = sorted({entry["product"] for entry in entries})
-    result["country"] = country
-    if len(products) != 1:
-        result["reason"] = ("No CDLM product" if not products else "More than one CDLM product") \
-                           + f" matches {model_hint} for {country}."
-        return result
-    result.update({"product": products[0], "matched": True,
-                   "reason": f"Drawing model {model_hint} maps to CDLM product {products[0]}."})
-    return result
 _blank_label_cache = None
 
 
@@ -1266,24 +1206,9 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
             matched_symbols, detect_source_text_bottom(label_crop, matched_symbols)
         )
 
-    # The controlled reference labels with one approved symbol align that
-    # symbol's left edge with the country-specific text block.  Template
-    # matching can be a few pixels off because it detects graphic strokes,
-    # rather than the intended layout guide.
-    approved_symbols = [
-        symbol for symbol in matched_symbols
-        if (specification := get_symbol_specification(symbol.get('code', '')))
-        and not specification.get('metadata_only')
-    ]
-    if len(approved_symbols) == 1:
-        approved_symbols[0]['x'] = round(editable_country_region['x'], 4)
-        # Reflow non-Thai controlled artwork 1 mm below the actual last source
-        # text line, rather than retaining empty space from the reference PDF.
-        if approved_symbols[0].get('code') != '100183':
-            approved_symbols[0]['y'] = round(min(
-                1.0 - LABEL_EDGE_MARGIN_MM / h_mm - approved_symbols[0]['h'],
-                editable_country_region['y'] + editable_country_region['h'] + LABEL_EDGE_MARGIN_MM / h_mm
-            ), 4)
+    # Symbol position comes from the reference label.  The matching PNG is
+    # placed at that location and only its approved specification controls
+    # size; country text never reflows a regulated symbol.
     editable_thai_symbol_region = thai_symbol_number_region(matched_symbols)
     n_matched = len(matched_symbols)
     log.info(f"  Result: {n_matched} matched, {len(failed_symbols)} skipped, "
@@ -1306,7 +1231,6 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
         'text_elements': text_elements,
         'country_text_region': editable_country_region,
         'thai_symbol_region': editable_thai_symbol_region,
-        'inferred_context': infer_label_context(full_text),
         'label_image': label_image_b64,
         'debug': {
             'render_dpi': RENDER_DPI,
@@ -1481,11 +1405,7 @@ async def api_catalog():
             'product_desc': lab['title'],
             'label_size': f"{lab['h_mm']} X {lab['w_mm']} mm",
             'sheet_name': lab['id'],
-            'symbol_count': len(lab['symbols']),
-            # Catalog labels have already been read once, so expose only the
-            # small, explainable country/model hints needed for immediate CDLM
-            # preselection (no label text or artwork is sent here).
-            'inferred_context': lab.get('inferred_context', {})
+            'symbol_count': len(lab['symbols'])
         } for lab in c['labels']],
         "count": len(c['labels'])
     }
@@ -1502,22 +1422,6 @@ def cdlm_response(matrix: Dict, country: Optional[str], product: Optional[str]) 
             and "product label" in entry["location"].lower()
         ]
     return response
-
-
-@app.get("/api/country-labels/suggest")
-async def api_country_label_suggestion(country_hint: Optional[str] = None, model_hint: Optional[str] = None,
-                                       session_id: Optional[str] = None):
-    """Return an automatic CDLM selection only when the drawing mapping is unique."""
-    session = _uploaded_cdlm_sessions.get(session_id or "")
-    if session and time.time() - session["created_at"] <= 30 * 60:
-        matrix = session["matrix"]
-    elif session_id:
-        return JSONResponse(content={"error": "The uploaded CDLM workbook session has expired. Upload it again."}, status_code=410)
-    else:
-        matrix = load_country_label_matrix()
-    if matrix["error"]:
-        return JSONResponse(content={"error": matrix["error"]}, status_code=503)
-    return suggest_cdlm_selection(matrix, country_hint, model_hint)
 
 
 @app.get("/api/country-labels")
@@ -1753,7 +1657,6 @@ def build_generation_response(lab, assets):
         "text_elements": sanitize(lab.get('text_elements', [])),
         "country_text_region": sanitize(lab.get('country_text_region')),
         "thai_symbol_region": sanitize(lab.get('thai_symbol_region')),
-        "inferred_context": sanitize(lab.get('inferred_context', {})),
         "label_image": lab.get('label_image'),
         "symbol_images": sym_images,
         "symbols_placed": len(lab['symbols']),
