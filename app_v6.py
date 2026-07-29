@@ -1086,6 +1086,17 @@ def process_pdf_label(pdf_path, symbol_assets, output_dpi=600):
     )
     if editable_country_region is None:
         editable_country_region = fallback_country_text_region(matched_symbols)
+
+    # The controlled reference labels with one approved symbol align that
+    # symbol's left edge with the country-specific text block.  Template
+    # matching can be a few pixels off because it detects graphic strokes,
+    # rather than the intended layout guide.
+    approved_symbols = [
+        symbol for symbol in matched_symbols
+        if get_symbol_specification(symbol.get('code', '')) is not None
+    ]
+    if len(approved_symbols) == 1:
+        approved_symbols[0]['x'] = round(editable_country_region['x'], 4)
     n_matched = len(matched_symbols)
     log.info(f"  Result: {n_matched} matched, {len(failed_symbols)} skipped, "
              f"{n_components} components")
