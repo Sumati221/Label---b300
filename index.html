@@ -354,6 +354,11 @@ async function generate(){
     await suggestCdlmSelection(data.inferred_context||{});
     const countryText=await getCountryLabelText();
     const textWasPlaced=renderLabel(data,countryText);
+    const detectedCountry=data.inferred_context&&data.inferred_context.country_hint;
+    if(!countryText&&data.country_text_source&&detectedCountry){
+      document.getElementById('mappingStatus').textContent=
+        `Detected country: ${detectedCountry} (${data.country_text_source}). The preview is showing the original PDF text; no CDLM text was inserted.`;
+    }
     document.getElementById('downloadBtn').disabled=false;
     validateBlankLabel(data);
     if(data.thai_symbol_region) addLog('Click the notification number inside the Thai FDA symbol to replace it.',false);

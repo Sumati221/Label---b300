@@ -325,21 +325,32 @@ def normalized_words(value: str) -> str:
 def infer_label_context(text: str) -> Dict:
     """Read country and the explicit printed model from a label drawing."""
     normalized = normalized_words(text)
-    country_hint = next((country for country, aliases in COUNTRY_ALIASES.items()
-                         if any(re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", normalized)
-                                for alias in aliases)), None)
+    country_hint = None
+    country_evidence = None
+    for country, aliases in COUNTRY_ALIASES.items():
+        matched_alias = next((alias for alias in aliases
+                              if re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", normalized)), None)
+        if matched_alias:
+            country_hint = country
+            country_evidence = matched_alias
+            break
     model_match = re.search(r"(?:modelo|model)\s*:\s*(FM\s*-?\s*\d{1,3})\b", text or "", flags=re.IGNORECASE)
     if not model_match:
         model_match = re.search(r"\b(FM\s*-?\s*\d{1,3})\b", text or "", flags=re.IGNORECASE)
     model_hint = re.sub(r"\s|-", "", model_match.group(1).upper()) if model_match else None
-    return {"country_hint": country_hint, "model_hint": model_hint}
+    return {
+        "country_hint": country_hint,
+        "model_hint": model_hint,
+        "country_evidence": country_evidence,
+        "country_source": "reference PDF text" if country_hint else None,
+    }
 
 
 def suggest_cdlm_selection(matrix: Dict, country_hint: Optional[str], model_hint: Optional[str]) -> Dict:
     """Return a CDLM selection only when the country/model match is unique."""
     result = {"country": None, "product": None, "model": model_hint, "matched": False, "reason": None}
-    if not country_hint or not model_hint:
-        result["reason"] = "No unambiguous country and model were found on the drawing."
+    if not country_hint:
+        result["reason"] = "No unambiguous country was found on the reference PDF."
         return result
     hint_words = normalized_words(country_hint)
     country = next((value for value in matrix.get("countries", [])
@@ -347,12 +358,15 @@ def suggest_cdlm_selection(matrix: Dict, country_hint: Optional[str], model_hint
     if not country:
         result["reason"] = f"The drawing country '{country_hint}' is not present in the CDLM workbook."
         return result
+    result["country"] = country
+    if not model_hint:
+        result["reason"] = f"Detected {country} from the reference PDF text; no model was found to auto-select a CDLM product."
+        return result
     model = normalized_words(model_hint).replace(" ", "")
     entries = [entry for entry in matrix.get("entries", [])
                if entry.get("country") == country and "product label" in entry.get("location", "").lower()
                and model in normalized_words(entry.get("text", "")).replace(" ", "")]
     products = sorted({entry["product"] for entry in entries})
-    result["country"] = country
     if len(products) != 1:
         result["reason"] = ("No CDLM product" if not products else "More than one CDLM product") + f" matches {model_hint} for {country}."
         return result
@@ -1850,6 +1864,7 @@ def build_generation_response(lab, assets):
         "text_region": sanitize(lab.get('text_region')),
         "text_elements": sanitize(lab.get('text_elements', [])),
         "country_text_region": sanitize(lab.get('country_text_region')),
+        "country_text_source": "reference PDF text" if (lab.get('country_text_region') or {}).get('text') else None,
         "thai_symbol_region": sanitize(lab.get('thai_symbol_region')),
         "layout_manifest": sanitize(lab.get('layout_manifest')),
         "inferred_context": sanitize(lab.get('inferred_context', {})),
