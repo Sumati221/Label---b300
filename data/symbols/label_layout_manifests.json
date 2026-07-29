@@ -7,8 +7,11 @@
       "reference_pdf": "453665084031-M-MART_2331.pdf",
       "label_size_mm": {"width": 85, "height": 50},
       "blank_label": {"part_number": "453665192211", "corner_radius_mm": 2, "clean_render": true},
-      "country_text_region": {"x": 0.0647, "y": 0.195, "w": 0.84, "h": 0.30, "font_size": 1.6, "line_height": 1.10, "detected_from": "reviewed-layout-manifest"},
-      "symbols": {"100025": {"x_mm": 5.5, "y_mm": 29.5, "width_mm": 20.0, "source": "LS-100025 specification / reference drawing"}}
+      "country_text_region": {"x": 0.0647, "y": 0.195, "w": 0.62, "h": 0.27, "font_size": 2.1, "line_height": 1.10, "detected_from": "reviewed-layout-manifest"},
+      "symbols": {
+        "100012": {"x_mm": 5.5, "y_mm": 4.5, "width_mm": 20.0, "height_mm": 3.7, "source": "Philips wordmark minimum is 15 mm; reference artwork uses 20 mm"},
+        "100025": {"x_mm": 5.5, "y_mm": 23.0, "width_mm": 20.0, "height_mm": 16.0, "source": "LS-100025 specification; 1 mm controlled clearance below country text"}
+      }
     },
     "453665020541-M-MART_2303": {
       "status": "reviewed",

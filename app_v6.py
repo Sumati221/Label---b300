@@ -525,7 +525,9 @@ def apply_layout_manifest(label_id: str, matched_symbols: List[Dict], country_re
             prior_w = float(symbol.get("w", 0))
             prior_h = float(symbol.get("h", 0))
             symbol["w"] = round(float(slot["width_mm"]) / w_mm, 4)
-            if prior_w > 0 and prior_h > 0:
+            if slot.get("height_mm") is not None:
+                symbol["h"] = round(float(slot["height_mm"]) / h_mm, 4)
+            elif prior_w > 0 and prior_h > 0:
                 symbol["h"] = round(symbol["w"] * prior_h / prior_w, 4)
         symbol["layout_source"] = "reviewed-layout-manifest"
 
