@@ -186,6 +186,11 @@ async function suggestCdlmSelection(context){
   if(!response.ok||suggestion.error)throw new Error(suggestion.detail||suggestion.error||'Unable to map this label to CDLM.');
   const status=document.getElementById('mappingStatus');
   if(!suggestion.matched){
+    if(suggestion.country){
+      const country=document.getElementById('country');
+      if(![...country.options].some(option=>option.value===suggestion.country))await loadCountryLabelOptions();
+      country.value=suggestion.country;
+    }
     status.textContent=suggestion.reason||'Automatic CDLM mapping is not available for this label.';
     return false;
   }

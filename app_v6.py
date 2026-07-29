@@ -327,7 +327,12 @@ def infer_label_context(text: str) -> Dict:
         if any(re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", normalized) for alias in aliases):
             country_hint = country
             break
-    model_match = re.search(r"\b(FM\s*-?\s*\d{1,3})\b", text or "", flags=re.IGNORECASE)
+    # A drawing title can describe a product family (for example FM30) while
+    # the actual printed label states a different model. Prefer that explicit
+    # label field, then fall back to a standalone FM token only if absent.
+    model_match = re.search(r"(?:modelo|model)\s*:\s*(FM\s*-?\s*\d{1,3})\b", text or "", flags=re.IGNORECASE)
+    if not model_match:
+        model_match = re.search(r"\b(FM\s*-?\s*\d{1,3})\b", text or "", flags=re.IGNORECASE)
     model_hint = re.sub(r"\s|-", "", model_match.group(1).upper()) if model_match else None
     return {"country_hint": country_hint, "model_hint": model_hint}
 
