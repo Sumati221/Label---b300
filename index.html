@@ -69,7 +69,9 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 <select id="dpi"><option value="300">300 DPI</option><option value="600" selected>600 DPI</option></select>
 
 <button class="btn" id="genBtn" onclick="generate()" disabled>Generate Label</button>
-<button class="btn" id="downloadBtn" onclick="downloadLabelPng()" disabled>Download Label PNG</button>
+<label for="outputFormat">Output format</label>
+<select id="outputFormat"><option value="png" selected>PNG</option><option value="svg">SVG</option></select>
+<button class="btn" id="downloadBtn" onclick="downloadLabel()" disabled>Download Label PNG</button>
 <div class="format-tools" aria-label="Country text formatting">
   <span>Selected text:</span>
   <button type="button" onmousedown="event.preventDefault()" onclick="formatCountryText('bold')"><b>B</b> Bold</button>
@@ -489,7 +491,51 @@ function fitCountryText(){
     size-=0.25;field.style.fontSize=`${size}px`;
   }
 }
-async function downloadLabelPng(){
+function outputFormatChanged(){
+  const format=document.getElementById('outputFormat').value.toUpperCase();
+  document.getElementById('downloadBtn').textContent=`Download Label ${format}`;
+}
+document.getElementById('outputFormat').addEventListener('change',outputFormatChanged);
+
+function downloadBlob(blob,filename){
+  const link=document.createElement('a');
+  link.href=URL.createObjectURL(blob);link.download=filename;
+  link.style.display='none';document.body.appendChild(link);link.click();link.remove();
+  setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+}
+
+function svgEsc(value){return String(value||'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&apos;','"':'&quot;'}[char]));}
+
+function downloadLabelSvg(){
+  if(!lastRender)return;
+  const data=lastRender.data,pxPerMm=96/25.4;
+  const width=Math.round(Number(data.w_mm)*pxPerMm),height=Math.round(Number(data.h_mm)*pxPerMm);
+  const clean=Boolean(data.layout_manifest?.blank_label?.clean_render);
+  let artwork='';
+  if(clean){
+    const radius=Number(data.layout_manifest?.blank_label?.corner_radius_mm||0)*pxPerMm;
+    artwork+=`<rect x="0.5" y="0.5" width="${width-1}" height="${height-1}" rx="${radius}" fill="white" stroke="black" stroke-width="1"/>`;
+  }else if(data.label_image){artwork+=`<image x="0" y="0" width="${width}" height="${height}" href="data:image/png;base64,${data.label_image}"/>`;}
+  const symbolFilter=sym=>clean||(sym.specification&&sym.code!=='100183'&&!sym.specification.metadata_only);
+  (data.symbols||[]).filter(symbolFilter).forEach(sym=>{
+    const image=(data.symbol_images||{})[sym.asset];if(!image)return;
+    artwork+=`<image x="${sym.x*width}" y="${sym.y*height}" width="${sym.w*width}" height="${sym.h*height}" preserveAspectRatio="none" href="data:image/png;base64,${image}"/>`;
+  });
+  (data.reference_graphics||[]).forEach(graphic=>{
+    if(graphic.image)artwork+=`<image x="${graphic.x*width}" y="${graphic.y*height}" width="${graphic.w*width}" height="${graphic.h*height}" preserveAspectRatio="none" href="data:image/png;base64,${graphic.image}"/>`;
+  });
+  const region=data.country_text_region;
+  if(region){
+    const font=Math.max(7,Number(region.font_size||2.8)*pxPerMm);
+    const html=data._countryHtml||'<span style="color:#777">Country-specific label text</span>';
+    artwork+=`<foreignObject x="${region.x*width}" y="${region.y*height}" width="${region.w*width}" height="${region.h*height}"><div xmlns="http://www.w3.org/1999/xhtml" style="box-sizing:border-box;width:100%;height:100%;overflow:hidden;padding:3px 4px;background:white;color:#222;font-family:Arial,sans-serif;font-size:${font}px;line-height:1.18;white-space:pre-wrap">${html}</div></foreignObject>`;
+  }
+  const svg=`<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" width="${data.w_mm}mm" height="${data.h_mm}mm" viewBox="0 0 ${width} ${height}">${artwork}</svg>`;
+  downloadBlob(new Blob([svg],{type:'image/svg+xml;charset=utf-8'}),`${data.label_id||'label'}.svg`);
+}
+
+async function downloadLabel(){
+  if(document.getElementById('outputFormat').value==='svg'){downloadLabelSvg();return;}
   if(!lastRender)return;
   const dpi=Number(document.getElementById('dpi').value);
   const button=document.getElementById('downloadBtn');
@@ -509,13 +555,9 @@ async function downloadLabelPng(){
     })});
     if(!response.ok)throw new Error('The PNG could not be created.');
     const blob=await response.blob();
-    const link=document.createElement('a');
-    link.href=URL.createObjectURL(blob);
-    link.download=`${data.label_id||'label'}-${dpi}dpi.png`;
-    link.style.display='none';document.body.appendChild(link);link.click();link.remove();
-    setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+    downloadBlob(blob,`${data.label_id||'label'}-${dpi}dpi.png`);
   }catch(error){addLog(error.message,true);}
-  finally{button.disabled=false;button.textContent='Download Label PNG';}
+  finally{button.disabled=false;outputFormatChanged();}
 }
 function addLog(msg,err=false,ok=false){
   const b=document.getElementById('logBox');
