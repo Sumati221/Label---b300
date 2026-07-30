@@ -535,33 +535,28 @@ function downloadBlob(blob,filename){
   setTimeout(()=>URL.revokeObjectURL(link.href),1000);
 }
 
-function svgEsc(value){return String(value||'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&apos;','"':'&quot;'}[char]));}
+function blobAsDataUrl(blob){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onerror=()=>reject(new Error('The SVG image could not be encoded.'));
+    reader.onload=()=>resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+}
 
-function downloadLabelSvg(){
+async function downloadLabelSvg(){
   if(!lastRender)return;
-  const data=lastRender.data,pxPerMm=96/25.4;
+  const data=lastRender.data;
+  const dpi=Number(document.getElementById('dpi').value);
+  const response=await fetch('/api/export-png',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(exportPayload(data,dpi))});
+  if(!response.ok)throw new Error('The SVG could not be created.');
+  const embeddedPng=await blobAsDataUrl(await response.blob());
+  const pxPerMm=96/25.4;
   const width=Math.round(Number(data.w_mm)*pxPerMm),height=Math.round(Number(data.h_mm)*pxPerMm);
-  const clean=Boolean(data.layout_manifest?.blank_label?.clean_render);
-  let artwork='';
-  if(clean){
-    const radius=Number(data.layout_manifest?.blank_label?.corner_radius_mm||0)*pxPerMm;
-    artwork+=`<rect x="0.5" y="0.5" width="${width-1}" height="${height-1}" rx="${radius}" fill="white" stroke="black" stroke-width="1"/>`;
-  }else if(data.label_image){artwork+=`<image x="0" y="0" width="${width}" height="${height}" href="data:image/png;base64,${data.label_image}"/>`;}
-  const symbolFilter=sym=>clean||(sym.specification&&sym.code!=='100183'&&!sym.specification.metadata_only);
-  (data.symbols||[]).filter(symbolFilter).forEach(sym=>{
-    const image=(data.symbol_images||{})[sym.asset];if(!image)return;
-    artwork+=`<image x="${sym.x*width}" y="${sym.y*height}" width="${sym.w*width}" height="${sym.h*height}" preserveAspectRatio="none" href="data:image/png;base64,${image}"/>`;
-  });
-  (data.reference_graphics||[]).forEach(graphic=>{
-    if(graphic.image)artwork+=`<image x="${graphic.x*width}" y="${graphic.y*height}" width="${graphic.w*width}" height="${graphic.h*height}" preserveAspectRatio="none" href="data:image/png;base64,${graphic.image}"/>`;
-  });
-  const region=data.country_text_region;
-  if(region){
-    const font=Math.max(7,Number(region.font_size||2.8)*pxPerMm);
-    const html=data._countryHtml||'<span style="color:#777">Country-specific label text</span>';
-    artwork+=`<foreignObject x="${region.x*width}" y="${region.y*height}" width="${region.w*width}" height="${region.h*height}"><div xmlns="http://www.w3.org/1999/xhtml" style="box-sizing:border-box;width:100%;height:100%;overflow:hidden;padding:3px 4px;background:white;color:#222;font-family:Arial,sans-serif;font-size:${font}px;line-height:1.18;white-space:pre-wrap">${html}</div></foreignObject>`;
-  }
-  const svg=`<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" width="${data.w_mm}mm" height="${data.h_mm}mm" viewBox="0 0 ${width} ${height}">${artwork}</svg>`;
+  // Adobe Illustrator does not support browser-only SVG foreignObject markup.
+  // Embed the same server-rendered PNG used by the PNG download in SVG 1.1.
+  // This yields an interoperable physical-size SVG and preserves every edit.
+  const svg=`<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="${data.w_mm}mm" height="${data.h_mm}mm" viewBox="0 0 ${width} ${height}">\n  <title>${data.label_id||'Generated label'}</title>\n  <image x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none" xlink:href="${embeddedPng}"/>\n</svg>\n`;
   downloadBlob(new Blob([svg],{type:'image/svg+xml;charset=utf-8'}),`${data.label_id||'label'}.svg`);
 }
 
@@ -594,13 +589,17 @@ async function downloadDrawingPdf(){
 
 async function downloadLabel(){
   const format=document.getElementById('outputFormat').value;
-  if(format==='svg'){downloadLabelSvg();return;}
   if(!lastRender)return;
   const dpi=Number(document.getElementById('dpi').value);
   const button=document.getElementById('downloadBtn');
   button.disabled=true;button.textContent='Preparing PNG...';
   try{
     const data=lastRender.data;
+    if(format==='svg'){
+      button.textContent='Preparing SVG...';
+      await downloadLabelSvg();
+      return;
+    }
     if(format==='drawing_pdf'){
       button.textContent='Preparing Drawing PDF...';
       await downloadDrawingPdf();
