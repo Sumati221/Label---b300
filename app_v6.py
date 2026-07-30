@@ -239,6 +239,7 @@ _SYMBOLS = _APP / "data" / "symbols"
 _SYMBOL_ASSETS = _SYMBOLS / "assets"
 _LABEL_GUIDES = _APP / "data" / "label_guides"
 _CDLM = _APP / "data" / "cdlm"
+_DRAWINGS = _APP / "data" / "drawings"
 RENDER_DPI = 300  # DPI for PDF rasterization during matching
 # Component IoU is deliberately conservative. A false positive must never add
 # an unrelated regulatory mark to a label simply because the asset library grew.
@@ -246,6 +247,7 @@ MATCH_THRESHOLD = 0.22
 MATCH_UNIQUENESS_MARGIN = 0.035
 LABEL_EDGE_MARGIN_MM = 1.0  # Keep all placed symbols clear of the blank label border
 _layout_manifest_cache = None
+_drawing_catalog_cache = None
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # Uploads are processed temporarily, never retained.
 
 # This schema turns a human edit request into a bounded operation.  The client
@@ -279,6 +281,11 @@ class LabelExportRequest(BaseModel):
     thai_symbol_text: str = Field(default="", max_length=100)
     thai_symbol_y: Optional[float] = Field(default=None, ge=0, le=1)
     layout_manifest: Optional[Dict] = None
+
+
+class DrawingExportRequest(LabelExportRequest):
+    """A generated label placed on its approved blank-label drawing."""
+    drawing_part_number: str = Field(min_length=12, max_length=20)
 
 # Extracted from the controlled specification documents. These values are kept
 # with the app so label generation does not depend on a live AI/SQL request.
@@ -550,6 +557,34 @@ def load_blank_label_catalog() -> Dict:
         log.warning("Blank-label catalog unavailable: %s", error)
         _blank_label_cache = {"labels": [], "error": "Blank-label catalog is unavailable."}
     return _blank_label_cache
+
+
+def load_drawing_catalog() -> Dict:
+    """Load reviewed placement rectangles for controlled blank-label drawings.
+
+    The part number is the join key: a label guide declares its blank-label
+    stock and this catalog identifies the drawing that defines that stock.
+    Keeping the rectangle in drawing coordinates avoids guessing placement
+    from the raster preview and preserves the controlled drawing scale.
+    """
+    global _drawing_catalog_cache
+    if _drawing_catalog_cache is not None:
+        return _drawing_catalog_cache
+    try:
+        raw = json.loads((_DRAWINGS / "drawing_catalog.json").read_text(encoding="utf-8"))
+        drawings = [item for item in raw.get("drawings", [])
+                    if item.get("part_number") and item.get("file") and item.get("target_rect_pt")]
+        _drawing_catalog_cache = {"drawings": drawings, "error": None}
+    except (OSError, ValueError, TypeError) as error:
+        log.warning("Drawing catalog unavailable: %s", error)
+        _drawing_catalog_cache = {"drawings": [], "error": "No reviewed drawing placements are available."}
+    return _drawing_catalog_cache
+
+
+def drawing_for_part_number(part_number: str) -> Optional[Dict]:
+    normalized = re.sub(r"[^0-9]", "", str(part_number or ""))
+    return next((item for item in load_drawing_catalog()["drawings"]
+                 if re.sub(r"[^0-9]", "", str(item.get("part_number", ""))) == normalized), None)
 
 
 def load_layout_manifests() -> Dict:
@@ -1784,6 +1819,12 @@ async def api_blank_labels():
     return catalog
 
 
+@app.get("/api/drawings")
+async def api_drawings():
+    """Expose only the reviewed blank-label drawings available for output."""
+    return load_drawing_catalog()
+
+
 @app.post("/api/country-labels/upload")
 async def api_upload_country_labels(file: UploadFile = File(...)):
     """Parse an uploaded CDLM XLSX in memory for this browser session only."""
@@ -1943,6 +1984,59 @@ async def api_export_png(request: LabelExportRequest):
     except Exception as exc:
         log.error("PNG export failed: %s", exc, exc_info=True)
         raise HTTPException(422, "Unable to create the PNG export.")
+
+
+@app.post("/api/export-drawing")
+async def api_export_drawing(request: DrawingExportRequest):
+    """Place the completed label into its matching controlled drawing PDF.
+
+    The source drawing remains unchanged.  The returned PDF is a new copy with
+    the generated physical-size label placed into its reviewed target rectangle.
+    """
+    if not HAS_FITZ:
+        raise HTTPException(503, "Drawing PDF export is not available in this app runtime.")
+    drawing = drawing_for_part_number(request.drawing_part_number)
+    if not drawing:
+        raise HTTPException(422, "No reviewed drawing is available for the selected blank label stock.")
+    drawing_path = _DRAWINGS / Path(str(drawing["file"])).name
+    if not drawing_path.is_file():
+        raise HTTPException(422, "The matched drawing file is not available to this app.")
+    target = drawing.get("target_rect_pt", [])
+    if not isinstance(target, list) or len(target) != 4:
+        raise HTTPException(422, "The matched drawing has no valid label placement rectangle.")
+    try:
+        png_response = await api_export_png(request)
+        png_bytes = bytearray()
+        async for chunk in png_response.body_iterator:
+            png_bytes.extend(chunk)
+        if not png_bytes:
+            raise ValueError("Label PNG renderer returned no data")
+
+        document = fitz.open(drawing_path)
+        page_index = int(drawing.get("page", 0))
+        if page_index < 0 or page_index >= len(document):
+            raise ValueError("Drawing target page is outside the source document")
+        rect = fitz.Rect(*[float(value) for value in target])
+        page = document[page_index]
+        rotation = int(drawing.get("rotation", 0))
+        if rotation not in {0, 90, 180, 270}:
+            raise ValueError("Drawing placement rotation must be a right angle")
+        page.insert_image(rect, stream=bytes(png_bytes), keep_proportion=False,
+                          overlay=True, rotate=rotation)
+        output = document.tobytes(garbage=4, deflate=True)
+        document.close()
+        safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "-", request.label_id or "label")
+        part = re.sub(r"[^0-9]", "", request.drawing_part_number)
+        return Response(
+            content=output,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{safe_label}-on-{part}-drawing.pdf"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("Drawing PDF export failed: %s", exc, exc_info=True)
+        raise HTTPException(422, "Unable to create the drawing PDF export.")
 
 
 @app.post("/api/interpret-edit")

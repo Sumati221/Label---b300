@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "description": "Reviewed placement areas for controlled blank-label drawings. Rectangles are PDF points in the source drawing coordinate system (origin: top-left).",
+  "drawings": [
+    {
+      "part_number": "453564437541",
+      "file": "453564437541-M-ADWG_2549.pdf",
+      "page": 0,
+      "label_size_mm": {"width": 85, "height": 50},
+      "target_rect_pt": [170.1, 155.9, 411.0, 297.6],
+      "source": "Controlled drawing 453564437541-M-ADWG_2549"
+    },
+    {
+      "part_number": "453665192211",
+      "file": "453665192211-M-ADWG_2536.pdf",
+      "page": 0,
+      "label_size_mm": {"width": 85, "height": 50},
+      "target_rect_pt": [304.7, 184.3, 545.6, 326.0],
+      "source": "Controlled drawing 453665192211-M-ADWG_2536"
+    },
+    {
+      "part_number": "453665226081",
+      "file": "453665226081-M-ADWG_2609.pdf",
+      "page": 0,
+      "label_size_mm": {"width": 190, "height": 30},
+      "target_rect_pt": [155.9, 212.6, 694.5, 297.6],
+      "source": "Controlled drawing 453665226081-M-ADWG_2609"
+    },
+    {
+      "part_number": "453665225301",
+      "file": "453665225301-M-ADWG_2607.pdf",
+      "page": 0,
+      "label_size_mm": {"width": 148, "height": 105},
+      "target_rect_pt": [186.8, 231.7, 335.6, 441.5],
+      "rotation": 90,
+      "source": "Controlled drawing 453665225301-M-ADWG_2607"
+    }
+  ]
+}

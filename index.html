@@ -60,7 +60,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 <input id="cdlmUpload" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="uploadCdlmWorkbook()">
 <div id="cdlmUploadStatus" style="font-size:10px;color:#666;margin-top:4px">Uses the bundled CDLM workbook by default. Uploads are temporary for this browser session.</div>
 <label for="blankLabel">Blank label stock (optional)</label>
-<select id="blankLabel"><option value="">-- Select blank label stock --</option></select>
+<select id="blankLabel" onchange="updateDrawingAvailability()"><option value="">-- Select blank label stock --</option></select>
 <label for="country">Country label text</label>
 <select id="country"><option value="">-- Select country (optional) --</option></select>
 <label for="product">CDLM product</label>
@@ -70,8 +70,9 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 
 <button class="btn" id="genBtn" onclick="generate()" disabled>Generate Label</button>
 <label for="outputFormat">Output format</label>
-<select id="outputFormat"><option value="png" selected>PNG</option><option value="svg">SVG</option></select>
+<select id="outputFormat"><option value="png" selected>PNG</option><option value="svg">SVG</option><option value="drawing_pdf">Drawing PDF</option></select>
 <button class="btn" id="downloadBtn" onclick="downloadLabel()" disabled>Download Label PNG</button>
+<div id="drawingStatus" style="font-size:10px;color:#666;margin-top:5px"></div>
 <div class="format-tools" aria-label="Country text formatting">
   <span>Selected text:</span>
   <button type="button" onmousedown="event.preventDefault()" onclick="formatCountryText('bold')"><b>B</b> Bold</button>
@@ -86,7 +87,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 </div>
 </div>
 <script>
-let catalog=[], blankLabels=[], currentId='', lastRender=null, cdlmSessionId='', cdlmLocationHint='';
+let catalog=[], blankLabels=[], drawingCatalog=[], currentId='', lastRender=null, cdlmSessionId='', cdlmLocationHint='';
 
 async function loadCatalog(){
   try{
@@ -104,7 +105,36 @@ async function loadCatalog(){
     if(!catalog.length) s.innerHTML='<option>No labels found</option>';
     loadCountryLabelOptions();
     loadBlankLabelOptions();
+    loadDrawingCatalog();
   }catch(e){addLog('Catalog error: '+e.message,true)}
+}
+
+async function loadDrawingCatalog(){
+  try{
+    const response=await fetch('/api/drawings');
+    const data=await response.json();
+    drawingCatalog=data.drawings||[];
+    updateDrawingAvailability();
+  }catch(error){addLog('Drawing catalog unavailable: '+error.message,true);}
+}
+
+function drawingPartForRender(){
+  if(!lastRender)return '';
+  const manifestPart=lastRender.data.layout_manifest?.blank_label?.part_number;
+  return manifestPart||document.getElementById('blankLabel').value||'';
+}
+
+function updateDrawingAvailability(){
+  const status=document.getElementById('drawingStatus');
+  const part=drawingPartForRender();
+  const drawing=drawingCatalog.find(item=>String(item.part_number)===String(part));
+  if(drawing){
+    status.textContent=`Drawing PDF available: ${drawing.part_number} (${drawing.label_size_mm.width} × ${drawing.label_size_mm.height} mm).`;
+  }else if(part){
+    status.textContent=`No reviewed drawing is available for blank label ${part}.`;
+  }else{
+    status.textContent='Drawing PDF is available after a matching blank label is selected or detected.';
+  }
 }
 
 async function loadBlankLabelOptions(){
@@ -379,6 +409,7 @@ function renderLabel(data,countryText=''){
   if(!data._countryHtml)data._countryHtml=plainTextToHtml(countryText||(countryRegion?countryRegion.text:''));
   if(countryText)data._countryHtml=plainTextToHtml(countryText);
   lastRender={data,countryText};
+  updateDrawingAvailability();
   const preview=document.getElementById('preview');
   const SCALE=3.5;
   const wPx=data.w_mm*SCALE;
@@ -492,8 +523,8 @@ function fitCountryText(){
   }
 }
 function outputFormatChanged(){
-  const format=document.getElementById('outputFormat').value.toUpperCase();
-  document.getElementById('downloadBtn').textContent=`Download Label ${format}`;
+  const format=document.getElementById('outputFormat').value;
+  document.getElementById('downloadBtn').textContent=format==='drawing_pdf'?'Download Label on Drawing PDF':`Download Label ${format.toUpperCase()}`;
 }
 document.getElementById('outputFormat').addEventListener('change',outputFormatChanged);
 
@@ -534,25 +565,48 @@ function downloadLabelSvg(){
   downloadBlob(new Blob([svg],{type:'image/svg+xml;charset=utf-8'}),`${data.label_id||'label'}.svg`);
 }
 
+function exportPayload(data,dpi){
+  return {
+    label_id:data.label_id,
+    label_image:data.label_image,
+    w_mm:data.w_mm,h_mm:data.h_mm,dpi,
+    symbols:data.symbols,symbol_images:data.symbol_images,
+    reference_graphics:data.reference_graphics||[],
+    country_region:data.country_text_region,country_html:data._countryHtml||'',
+    thai_symbol_region:data.thai_symbol_region,thai_symbol_text:data._thaiSymbolText||'',
+    thai_symbol_y:data._thaiRenderedY,
+    layout_manifest:data.layout_manifest
+  };
+}
+
+async function downloadDrawingPdf(){
+  if(!lastRender)return;
+  const data=lastRender.data;
+  const part=drawingPartForRender();
+  const drawing=drawingCatalog.find(item=>String(item.part_number)===String(part));
+  if(!drawing)throw new Error('No reviewed drawing matches this label stock. Select a blank label stock with a drawing first.');
+  const dpi=Number(document.getElementById('dpi').value);
+  const response=await fetch('/api/export-drawing',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...exportPayload(data,dpi),drawing_part_number:drawing.part_number})});
+  if(!response.ok)throw new Error('The drawing PDF could not be created.');
+  const blob=await response.blob();
+  downloadBlob(blob,`${data.label_id||'label'}-on-${drawing.part_number}-drawing.pdf`);
+}
+
 async function downloadLabel(){
-  if(document.getElementById('outputFormat').value==='svg'){downloadLabelSvg();return;}
+  const format=document.getElementById('outputFormat').value;
+  if(format==='svg'){downloadLabelSvg();return;}
   if(!lastRender)return;
   const dpi=Number(document.getElementById('dpi').value);
   const button=document.getElementById('downloadBtn');
   button.disabled=true;button.textContent='Preparing PNG...';
   try{
     const data=lastRender.data;
-    const response=await fetch('/api/export-png',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      label_id:data.label_id,
-      label_image:data.label_image,
-      w_mm:data.w_mm,h_mm:data.h_mm,dpi,
-      symbols:data.symbols,symbol_images:data.symbol_images,
-      reference_graphics:data.reference_graphics||[],
-      country_region:data.country_text_region,country_html:data._countryHtml||'',
-      thai_symbol_region:data.thai_symbol_region,thai_symbol_text:data._thaiSymbolText||'',
-      thai_symbol_y:data._thaiRenderedY,
-      layout_manifest:data.layout_manifest
-    })});
+    if(format==='drawing_pdf'){
+      button.textContent='Preparing Drawing PDF...';
+      await downloadDrawingPdf();
+      return;
+    }
+    const response=await fetch('/api/export-png',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(exportPayload(data,dpi))});
     if(!response.ok)throw new Error('The PNG could not be created.');
     const blob=await response.blob();
     downloadBlob(blob,`${data.label_id||'label'}-${dpi}dpi.png`);
