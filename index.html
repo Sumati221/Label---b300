@@ -550,6 +550,11 @@ function svgTextEsc(value){
   }[character]));
 }
 
+function svgId(value,index=0){
+  const id=String(value||'symbol').replace(/[^a-zA-Z0-9_-]+/g,'_').replace(/^_+|_+$/g,'');
+  return `${id||'symbol'}_${index+1}`;
+}
+
 async function downloadLabelSvg(){
   if(!lastRender)return;
   const data=lastRender.data;
@@ -560,13 +565,45 @@ async function downloadLabelSvg(){
   const pxPerMm=96/25.4;
   const width=Math.round(Number(data.w_mm)*pxPerMm),height=Math.round(Number(data.h_mm)*pxPerMm);
   const blankLabel=(data.layout_manifest&&data.layout_manifest.blank_label)||{};
-  const cornerRadius=Math.max(0,Number(blankLabel.corner_radius_mm||0)*pxPerMm).toFixed(2);
+  const cornerRadius=Math.max(0,Number(blankLabel.corner_radius_mm||0)*pxPerMm||Math.min(width,height)*0.04).toFixed(2);
   const borderWidth=Math.max(1,0.25*pxPerMm).toFixed(2);
   const title=svgTextEsc(data.label_id||'Generated label');
+  const cleanRender=Boolean(blankLabel.clean_render);
+  const thaiSymbol=(data.symbols||[]).find(symbol=>symbol.code==='100183'&&symbol.specification);
+  const thaiY=Number.isFinite(data._thaiRenderedY)?data._thaiRenderedY:(thaiSymbol?Number(thaiSymbol.y):0);
+  const layerItems=[];
+  (data.symbols||[]).forEach((symbol,index)=>{
+    const rawAsset=(data.symbol_images||{})[symbol.asset];
+    const useNativeThai=!cleanRender&&symbol.code==='100183';
+    const isControlled=cleanRender||Boolean(symbol.specification&&!symbol.specification.metadata_only&&symbol.code!=='100183');
+    if(!rawAsset&&!useNativeThai||(!isControlled&&!useNativeThai))return;
+    const x=Math.max(0,Number(symbol.x||0)*width);
+    const y=Math.max(0,(useNativeThai?thaiY:Number(symbol.y||0))*height);
+    const symbolWidth=Math.max(1,Number(symbol.w||0)*width);
+    const symbolHeight=Math.max(1,Number(symbol.h||0)*height);
+    layerItems.push({
+      id:svgId(symbol.code||symbol.asset,index),
+      label:svgTextEsc(symbol.code?`Symbol ${symbol.code}`:`Symbol ${symbol.asset||index+1}`),
+      x,y,w:symbolWidth,h:symbolHeight,rawAsset,useNativeThai
+    });
+  });
+  const maskPad=Math.max(1,Number(borderWidth));
+  const baseMaskHoles=layerItems.map(item=>`    <rect x="${Math.max(0,item.x-maskPad).toFixed(2)}" y="${Math.max(0,item.y-maskPad).toFixed(2)}" width="${Math.min(width,item.w+2*maskPad).toFixed(2)}" height="${Math.min(height,item.h+2*maskPad).toFixed(2)}" fill="#000000"/>`).join('\n');
+  const symbolLayers=layerItems.map(item=>{
+    const content=item.useNativeThai
+      ? `<g clip-path="url(#${item.id}_Clip)"><image x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none" xlink:href="${embeddedPng}"/></g>`
+      : `<image x="${item.x.toFixed(2)}" y="${item.y.toFixed(2)}" width="${item.w.toFixed(2)}" height="${item.h.toFixed(2)}" preserveAspectRatio="none" xlink:href="data:image/png;base64,${item.rawAsset}"/>`;
+    return `    <g id="${item.id}" inkscape:groupmode="layer" inkscape:label="${item.label}" data-layer-name="${item.label}">\n      ${content}\n    </g>`;
+  }).join('\n');
+  const symbolClips=layerItems.filter(item=>item.useNativeThai).map(item=>`    <clipPath id="${item.id}_Clip"><rect x="${item.x.toFixed(2)}" y="${item.y.toFixed(2)}" width="${item.w.toFixed(2)}" height="${item.h.toFixed(2)}"/></clipPath>`).join('\n');
+  const contentInset=(Number(borderWidth)*1.5).toFixed(2);
+  const contentWidth=Math.max(1,width-2*Number(contentInset)).toFixed(2);
+  const contentHeight=Math.max(1,height-2*Number(contentInset)).toFixed(2);
   // Use SVG 1.1 only: Illustrator rejects browser-only foreignObject content.
-  // Top-level groups are named layers in Illustrator and Inkscape. The artwork
-  // remains the exact server-rendered output, avoiding a preview/export mismatch.
-  const svg=`<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" version="1.1" width="${data.w_mm}mm" height="${data.h_mm}mm" viewBox="0 0 ${width} ${height}">\n  <title>${title}</title>\n  <desc>Three-layer label export: Drawing Frame, Outline of Label, Artwork (Content of the Label).</desc>\n  <g id="Drawing_Frame" inkscape:groupmode="layer" inkscape:label="Drawing Frame" data-layer-name="Drawing Frame">\n    <rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff"/>\n  </g>\n  <g id="Outline_of_Label" inkscape:groupmode="layer" inkscape:label="Outline of Label" data-layer-name="Outline of Label">\n    <rect x="${Number(borderWidth)/2}" y="${Number(borderWidth)/2}" width="${Math.max(1,width-Number(borderWidth))}" height="${Math.max(1,height-Number(borderWidth))}" rx="${cornerRadius}" ry="${cornerRadius}" fill="none" stroke="#000000" stroke-width="${borderWidth}"/>\n  </g>\n  <g id="Artwork_Content_of_the_Label" inkscape:groupmode="layer" inkscape:label="Artwork (Content of the Label)" data-layer-name="Artwork (Content of the Label)">\n    <image id="Label_Artwork" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none" xlink:href="${embeddedPng}"/>\n  </g>\n</svg>\n`;
+  // The base artwork has transparent holes at controlled symbol locations.
+  // Each symbol is then emitted in its own child layer so its eye toggle in
+  // Illustrator genuinely shows/hides that symbol instead of a flat composite.
+  const svg=`<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" version="1.1" width="${data.w_mm}mm" height="${data.h_mm}mm" viewBox="0 0 ${width} ${height}">\n  <title>${title}</title>\n  <desc>Layered label export: Drawing Frame, Outline of Label, and independently visible symbol layers.</desc>\n  <defs>\n    <clipPath id="Label_Content_Clip"><rect x="${contentInset}" y="${contentInset}" width="${contentWidth}" height="${contentHeight}" rx="${cornerRadius}" ry="${cornerRadius}"/></clipPath>\n    <mask id="Base_Artwork_Mask" maskUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}">\n      <rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff"/>\n${baseMaskHoles}\n    </mask>\n${symbolClips}\n  </defs>\n  <g id="Drawing_Frame" inkscape:groupmode="layer" inkscape:label="Drawing Frame" data-layer-name="Drawing Frame">\n    <rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff"/>\n  </g>\n  <g id="Outline_of_Label" inkscape:groupmode="layer" inkscape:label="Outline of Label" data-layer-name="Outline of Label">\n    <rect x="${Number(borderWidth)/2}" y="${Number(borderWidth)/2}" width="${Math.max(1,width-Number(borderWidth))}" height="${Math.max(1,height-Number(borderWidth))}" rx="${cornerRadius}" ry="${cornerRadius}" fill="none" stroke="#000000" stroke-width="${borderWidth}"/>\n  </g>\n  <g id="Artwork_Content_of_the_Label" inkscape:groupmode="layer" inkscape:label="Artwork (Content of the Label)" data-layer-name="Artwork (Content of the Label)">\n    <g id="Reference_Text_and_Graphics" inkscape:label="Reference Text and Graphics" data-layer-name="Reference Text and Graphics" clip-path="url(#Label_Content_Clip)" mask="url(#Base_Artwork_Mask)">\n      <image id="Reference_Label_Artwork" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none" xlink:href="${embeddedPng}"/>\n    </g>\n    <g id="Symbols" inkscape:label="Symbols" data-layer-name="Symbols">\n${symbolLayers}\n    </g>\n  </g>\n</svg>\n`;
   downloadBlob(new Blob([svg],{type:'image/svg+xml;charset=utf-8'}),`${data.label_id||'label'}.svg`);
 }
 
