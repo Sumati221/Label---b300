@@ -44,6 +44,9 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .layer-panel{width:230px;background:#fff;border:1px solid #d9e1ee;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.06);padding:12px;font-size:12px;color:#233}
 .layer-panel h3{font-size:13px;color:#0d47a1;margin-bottom:9px}.layer-note{font-size:10px;line-height:1.35;color:#667;margin:0 0 9px}
 .layer-row{display:flex;align-items:center;gap:7px;padding:5px 3px;border-radius:4px}.layer-row:hover{background:#f1f6ff}.layer-row input{accent-color:#0d47a1}.layer-row.child{padding-left:23px}.layer-row.grandchild{padding-left:42px}.layer-icon{width:14px;color:#6b7785;text-align:center}.layer-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-editor-launch{position:fixed;right:22px;bottom:20px;z-index:30;border:0;border-radius:22px;background:#0d47a1;color:#fff;padding:11px 16px;font-weight:700;box-shadow:0 5px 16px rgba(13,71,161,.3);cursor:pointer}.ai-editor-launch:hover{background:#093080}
+.ai-editor{position:fixed;right:22px;bottom:20px;z-index:31;width:min(360px,calc(100vw - 30px));background:#fff;border:1px solid #c9d8ef;border-radius:10px;box-shadow:0 10px 28px rgba(0,0,0,.2);overflow:hidden}.ai-editor-header{background:#0d47a1;color:#fff;padding:11px 14px;font-weight:700;display:flex;align-items:center;justify-content:space-between}.ai-editor-header button{border:0;background:transparent;color:#fff;font-size:20px;line-height:1;cursor:pointer}.ai-editor-body{padding:12px}.ai-editor-help{font-size:11px;line-height:1.45;background:#f1f6ff;color:#31445f;padding:9px;border-radius:6px;margin-bottom:9px}.ai-editor-selection{font-size:11px;color:#0d47a1;font-weight:700;margin-bottom:7px}.ai-editor-input{width:100%;min-height:64px;resize:vertical;border:1px solid #9eb7de;border-radius:6px;padding:8px;font:12px system-ui,sans-serif}.ai-editor-actions{display:flex;gap:8px;margin-top:8px}.ai-editor-actions button{border:0;border-radius:6px;padding:8px 11px;font-weight:700;cursor:pointer}.ai-editor-apply{background:#0d47a1;color:#fff}.ai-editor-reset{background:#eef2f7;color:#31445f}.ai-editor-status{font-size:11px;line-height:1.35;margin-top:8px;min-height:15px;color:#52616f}.ai-editor-status.error{color:#b3261e}
+.ai-editing .controlled-symbol,.ai-editing .thai-native-symbol{pointer-events:auto;cursor:grab;outline:1px dashed transparent}.ai-editing .controlled-symbol:hover,.ai-editing .thai-native-symbol:hover{outline-color:#0d47a1}.ai-editing .editor-selected{outline:2px solid #0d47a1!important;box-shadow:0 0 0 2px rgba(13,71,161,.2)}.ai-editing .controlled-symbol:active,.ai-editing .thai-native-symbol:active{cursor:grabbing}
 @media(max-width:850px){.preview-workspace{flex-direction:column;align-items:center}.layer-panel{width:min(100%,420px)}}
 </style>
 </head><body>
@@ -95,6 +98,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 <script>
 let catalog=[], blankLabels=[], drawingCatalog=[], currentId='', lastRender=null, cdlmSessionId='', cdlmLocationHint='';
 let previewLayerState={frame:true,outline:true,artwork:true,symbols:{}};
+let aiEditorOpen=false, selectedEditorAsset='', editorStatus='';
 
 async function loadCatalog(){
   try{
@@ -394,6 +398,9 @@ async function generate(){
         data.failed_symbols.forEach(f=>{h+=`<li><b>${f.asset}</b>: ${f.reason} (conf:${(f.confidence||0).toFixed(3)})</li>`;});
         h+='</ul>';}
       h+='</div>';preview.innerHTML=h;addLog(data.error,true);return;}
+    data._editorOriginalSymbols=(data.symbols||[]).map(symbol=>({...symbol}));
+    data._editorOriginalThaiY=data._thaiRenderedY;
+    selectedEditorAsset='';editorStatus='';
     await suggestCdlmSelection(data.inferred_context||{});
     const countryText=await getCountryLabelText();
     const textWasPlaced=renderLabel(data,countryText);
@@ -440,7 +447,7 @@ function renderLabel(data,countryText=''){
     if(!imgData)return;
     if(cleanRender){
       previewLayerState.symbols[sym.asset]=true;
-      html+=`<div class="controlled-symbol" data-controlled-asset="${escapeHtml(sym.asset)}" data-preview-symbol="${escapeHtml(sym.asset)}" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Matched symbol ${escapeHtml(sym.code||'')}" src="data:image/png;base64,${imgData}"></div>`;
+      html+=`<div class="controlled-symbol" data-controlled-asset="${escapeHtml(sym.asset)}" data-preview-symbol="${escapeHtml(sym.asset)}" data-editor-symbol="${escapeHtml(sym.asset)}" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Matched symbol ${escapeHtml(sym.code||'')}" src="data:image/png;base64,${imgData}"></div>`;
       return;
     }
     const sourceX=Number(sym.source_x??sym.x),sourceY=Number(sym.source_y??sym.y);
@@ -448,7 +455,7 @@ function renderLabel(data,countryText=''){
     const maskPad=0.007;
     previewLayerState.symbols[sym.asset]=true;
     html+=`<div class="controlled-source-mask" data-preview-artwork style="left:${((sourceX-maskPad)*100).toFixed(2)}%;top:${((sourceY-maskPad)*100).toFixed(2)}%;width:${((sourceW+2*maskPad)*100).toFixed(2)}%;height:${((sourceH+2*maskPad)*100).toFixed(2)}%"></div>`;
-    html+=`<div class="controlled-symbol" data-controlled-asset="${escapeHtml(sym.asset)}" data-preview-symbol="${escapeHtml(sym.asset)}" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Controlled symbol ${escapeHtml(sym.code||'')}" src="data:image/png;base64,${imgData}"></div>`;
+    html+=`<div class="controlled-symbol" data-controlled-asset="${escapeHtml(sym.asset)}" data-preview-symbol="${escapeHtml(sym.asset)}" data-editor-symbol="${escapeHtml(sym.asset)}" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Controlled symbol ${escapeHtml(sym.code||'')}" src="data:image/png;base64,${imgData}"></div>`;
   });
   if(countryRegion){
     const tx=(countryRegion.x*100).toFixed(2),ty=(countryRegion.y*100).toFixed(2);
@@ -481,7 +488,7 @@ function renderLabel(data,countryText=''){
     const cropWidth=(100/thaiSymbol.w).toFixed(2),cropHeight=(100/thaiSymbol.h).toFixed(2);
     const cropLeft=(-thaiSymbol.x/thaiSymbol.w*100).toFixed(2),cropTop=(-thaiSymbol.y/thaiSymbol.h*100).toFixed(2);
     html+=`<div class="thai-source-mask" style="left:${sourceX}%;top:${sourceY}%;width:${sourceW}%;height:${sourceH}%"></div>`;
-    html+=`<div class="thai-native-symbol" data-preview-symbol="${escapeHtml(thaiSymbol.asset)}" data-thai-offset="0" style="left:${sourceX}%;top:${(renderedThaiY*100).toFixed(2)}%;width:${sourceW}%;height:${sourceH}%"><img alt="Thai FDA symbol" src="data:image/png;base64,${data.label_image}" style="width:${cropWidth}%;height:${cropHeight}%;left:${cropLeft}%;top:${cropTop}%"></div>`;
+    html+=`<div class="thai-native-symbol" data-preview-symbol="${escapeHtml(thaiSymbol.asset)}" data-editor-symbol="${escapeHtml(thaiSymbol.asset)}" data-thai-offset="0" style="left:${sourceX}%;top:${(renderedThaiY*100).toFixed(2)}%;width:${sourceW}%;height:${sourceH}%"><img alt="Thai FDA symbol" src="data:image/png;base64,${data.label_image}" style="width:${cropWidth}%;height:${cropHeight}%;left:${cropLeft}%;top:${cropTop}%"></div>`;
     const tx=(thaiRegion.x*100).toFixed(2),ty=(thaiRegion.y*100).toFixed(2);
     const tw=(thaiRegion.w*100).toFixed(2),th=(thaiRegion.h*100).toFixed(2);
     const fontPx=Math.max(6,Number(thaiRegion.font_size||1.7)*SCALE);
@@ -496,8 +503,9 @@ function renderLabel(data,countryText=''){
   html+=`</div><div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div></div>`;
   html+=buildPreviewLayerPanel(data);
   html+=`</div>`;
+  html+=buildAiEditor();
   preview.innerHTML=html;
-  requestAnimationFrame(()=>{fitCountryText();syncTextSymbolClearance();});
+  requestAnimationFrame(()=>{fitCountryText();syncTextSymbolClearance();wireSymbolEditor();});
   return Boolean(countryText&&countryRegion);
 }
 function buildPreviewLayerPanel(data){
@@ -536,6 +544,150 @@ function setPreviewSymbolLayer(asset,visible){
   document.querySelectorAll(`[data-preview-symbol="${CSS.escape(asset)}"]`).forEach(element=>{
     element.style.visibility=visible&&previewLayerState.artwork?'visible':'hidden';
   });
+}
+function editorSymbols(){
+  return (lastRender?.data?.symbols||[]).filter(symbol=>document.querySelector(`[data-editor-symbol="${CSS.escape(symbol.asset)}"]`));
+}
+function editorSymbolLabel(asset){
+  const symbol=(lastRender?.data?.symbols||[]).find(item=>item.asset===asset);
+  if(!symbol)return 'No symbol selected';
+  return symbol.specification?.symbol_name||symbol.specification?.name||(symbol.code?`Symbol ${symbol.code}`:symbol.asset);
+}
+function buildAiEditor(){
+  if(!lastRender)return '';
+  if(!aiEditorOpen)return `<button type="button" class="ai-editor-launch" onclick="toggleAiEditor()">✨ AI Editor</button>`;
+  const selected=escapeHtml(editorSymbolLabel(selectedEditorAsset));
+  const statusClass=editorStatus.startsWith('Unable')||editorStatus.startsWith('Select')?' error':'';
+  return `<section class="ai-editor" aria-label="AI label editor">
+    <div class="ai-editor-header"><span>✨ AI Label Editor</span><button type="button" aria-label="Close AI editor" onclick="toggleAiEditor()">×</button></div>
+    <div class="ai-editor-body">
+      <div class="ai-editor-help">Click a symbol to select it, then drag it on the label. Or describe an edit:<br>• “increase 100025 by 20%”<br>• “move INMETRO right 2 mm”<br>• “set 100183 width to 16 mm”</div>
+      <div class="ai-editor-selection">Selected: ${selected}</div>
+      <textarea id="aiEditCommand" class="ai-editor-input" aria-label="Describe a label edit" placeholder="Describe a symbol size or position edit…"></textarea>
+      <div class="ai-editor-actions"><button type="button" class="ai-editor-apply" onclick="applyAiEdit()">Apply edit</button><button type="button" class="ai-editor-reset" onclick="resetAiEdits()">Reset symbols</button></div>
+      <div id="aiEditorStatus" class="ai-editor-status${statusClass}">${escapeHtml(editorStatus||'Edits stay in this label preview and will be included in the download.')}</div>
+    </div>
+  </section>`;
+}
+function toggleAiEditor(){
+  aiEditorOpen=!aiEditorOpen;
+  editorStatus='';
+  renderLabel(lastRender.data,lastRender.countryText||'');
+}
+function selectEditorSymbol(asset){
+  selectedEditorAsset=asset;
+  document.querySelectorAll('[data-editor-symbol]').forEach(element=>element.classList.toggle('editor-selected',element.dataset.editorSymbol===asset));
+  const selection=document.querySelector('.ai-editor-selection');
+  if(selection)selection.textContent=`Selected: ${editorSymbolLabel(asset)}`;
+}
+function clampEditorSymbol(symbol){
+  symbol.w=Math.max(.005,Math.min(.98,Number(symbol.w)||.05));
+  symbol.h=Math.max(.005,Math.min(.98,Number(symbol.h)||.05));
+  symbol.x=Math.max(0,Math.min(1-symbol.w,Number(symbol.x)||0));
+  symbol.y=Math.max(0,Math.min(1-symbol.h,Number(symbol.y)||0));
+}
+function setEditorStatus(message,error=false){
+  editorStatus=message;
+  const status=document.getElementById('aiEditorStatus');
+  if(status){status.textContent=message;status.classList.toggle('error',error);}
+}
+function selectedOrMentionedSymbol(command){
+  const symbols=editorSymbols();
+  const normalized=command.toLowerCase();
+  const match=symbols.find(symbol=>{
+    const code=String(symbol.code||'').toLowerCase();
+    const asset=String(symbol.asset||'').toLowerCase();
+    const name=String(symbol.specification?.symbol_name||symbol.specification?.name||'').toLowerCase();
+    return (code&&normalized.includes(code))||(asset&&normalized.includes(asset.replace(/\.png$/,'')))||(name&&normalized.includes(name));
+  });
+  return match||symbols.find(symbol=>symbol.asset===selectedEditorAsset)||null;
+}
+function refreshAfterEditorChange(message){
+  const thai=(lastRender?.data?.symbols||[]).find(symbol=>symbol.code==='100183');
+  if(thai)lastRender.data._thaiRenderedY=thai.y;
+  editorStatus=message;
+  aiEditorOpen=true;
+  renderLabel(lastRender.data,lastRender.countryText||'');
+}
+function applyAiEdit(){
+  const input=document.getElementById('aiEditCommand');
+  const command=(input?.value||'').trim();
+  if(!command){setEditorStatus('Describe the size or position change you want.',true);return;}
+  const symbol=selectedOrMentionedSymbol(command);
+  if(!symbol){setEditorStatus('Select a symbol first, or include its symbol code in the command.',true);return;}
+  selectedEditorAsset=symbol.asset;
+  const lower=command.toLowerCase();
+  const percentMatch=lower.match(/(?:increase|enlarge|grow|make|decrease|reduce|shrink).*?(\d+(?:\.\d+)?)\s*%/);
+  const sizeMatch=lower.match(/(?:set|change).*?\b(width|height|size)\b.*?(\d+(?:\.\d+)?)\s*mm/);
+  const moveMatch=lower.match(/(?:move|shift).*?\b(left|right|up|down)\b\s*(\d+(?:\.\d+)?)\s*mm/);
+  if(percentMatch){
+    const percent=Number(percentMatch[1])/100;
+    const direction=/(decrease|reduce|shrink|smaller)/.test(lower)?-1:1;
+    const factor=Math.max(.05,1+direction*percent);
+    const centerX=symbol.x+symbol.w/2,centerY=symbol.y+symbol.h/2;
+    symbol.w*=factor;symbol.h*=factor;symbol.x=centerX-symbol.w/2;symbol.y=centerY-symbol.h/2;
+    clampEditorSymbol(symbol);
+    refreshAfterEditorChange(`${editorSymbolLabel(symbol.asset)} resized by ${direction>0?'+' : '-'}${percentMatch[1]}%.`);
+    return;
+  }
+  if(sizeMatch){
+    const kind=sizeMatch[1],mm=Number(sizeMatch[2]);
+    if(!(mm>0)){setEditorStatus('Use a positive size in millimetres.',true);return;}
+    const centerX=symbol.x+symbol.w/2,centerY=symbol.y+symbol.h/2;
+    if(kind==='width'){const factor=mm/(symbol.w*lastRender.data.w_mm);symbol.w=mm/lastRender.data.w_mm;symbol.h*=factor;}
+    else if(kind==='height'){const factor=mm/(symbol.h*lastRender.data.h_mm);symbol.h=mm/lastRender.data.h_mm;symbol.w*=factor;}
+    else {const factor=mm/(symbol.w*lastRender.data.w_mm);symbol.w=mm/lastRender.data.w_mm;symbol.h*=factor;}
+    symbol.x=centerX-symbol.w/2;symbol.y=centerY-symbol.h/2;clampEditorSymbol(symbol);
+    refreshAfterEditorChange(`${editorSymbolLabel(symbol.asset)} ${kind} set to ${mm} mm.`);
+    return;
+  }
+  if(moveMatch){
+    const direction=moveMatch[1],mm=Number(moveMatch[2]);
+    const distanceX=mm/lastRender.data.w_mm,distanceY=mm/lastRender.data.h_mm;
+    if(direction==='left')symbol.x-=distanceX;if(direction==='right')symbol.x+=distanceX;
+    if(direction==='up')symbol.y-=distanceY;if(direction==='down')symbol.y+=distanceY;
+    clampEditorSymbol(symbol);
+    refreshAfterEditorChange(`${editorSymbolLabel(symbol.asset)} moved ${direction} ${mm} mm.`);
+    return;
+  }
+  setEditorStatus('Unable to interpret that edit. Try “increase 100025 by 20%”, “move 100025 right 2 mm”, or “set 100025 width to 16 mm”.',true);
+}
+function resetAiEdits(){
+  const data=lastRender?.data;
+  if(!data?._editorOriginalSymbols)return;
+  data.symbols=data._editorOriginalSymbols.map(symbol=>({...symbol}));
+  data._thaiRenderedY=data._editorOriginalThaiY;
+  selectedEditorAsset='';
+  refreshAfterEditorChange('Symbol positions and sizes reset to the generated layout.');
+}
+function wireSymbolEditor(){
+  const preview=document.getElementById('preview');
+  preview.classList.toggle('ai-editing',aiEditorOpen);
+  document.querySelectorAll('[data-editor-symbol]').forEach(element=>{
+    if(element.dataset.editorWired)return;
+    element.dataset.editorWired='true';
+    element.addEventListener('pointerdown',event=>{
+      if(!aiEditorOpen)return;
+      const asset=element.dataset.editorSymbol;
+      const symbol=(lastRender?.data?.symbols||[]).find(item=>item.asset===asset);
+      const label=document.querySelector('.label-container');
+      if(!symbol||!label)return;
+      event.preventDefault();selectEditorSymbol(asset);
+      const startX=event.clientX,startY=event.clientY,originX=Number(symbol.x),originY=Number(symbol.y);
+      const move=moveEvent=>{
+        symbol.x=originX+(moveEvent.clientX-startX)/label.clientWidth;
+        symbol.y=originY+(moveEvent.clientY-startY)/label.clientHeight;
+        clampEditorSymbol(symbol);
+        element.style.left=`${(symbol.x*100).toFixed(2)}%`;element.style.top=`${(symbol.y*100).toFixed(2)}%`;
+      };
+      const end=()=>{
+        window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',end);
+        refreshAfterEditorChange(`${editorSymbolLabel(asset)} moved by drag and drop.`);
+      };
+      window.addEventListener('pointermove',move);window.addEventListener('pointerup',end,{once:true});
+    });
+  });
+  if(selectedEditorAsset)selectEditorSymbol(selectedEditorAsset);
 }
 function renderedCountryTextBottom(field){
   const range=document.createRange();
