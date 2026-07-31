@@ -46,7 +46,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .layer-row{display:flex;align-items:center;gap:7px;padding:5px 3px;border-radius:4px}.layer-row:hover{background:#f1f6ff}.layer-row input{accent-color:#0d47a1}.layer-row.child{padding-left:23px}.layer-row.grandchild{padding-left:42px}.layer-icon{width:14px;color:#6b7785;text-align:center}.layer-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ai-editor-launch{position:fixed;right:22px;bottom:20px;z-index:30;border:0;border-radius:22px;background:#0d47a1;color:#fff;padding:11px 16px;font-weight:700;box-shadow:0 5px 16px rgba(13,71,161,.3);cursor:pointer}.ai-editor-launch:hover{background:#093080}
 .ai-editor{position:fixed;right:22px;bottom:20px;z-index:31;width:min(360px,calc(100vw - 30px));background:#fff;border:1px solid #c9d8ef;border-radius:10px;box-shadow:0 10px 28px rgba(0,0,0,.2);overflow:hidden}.ai-editor-header{background:#0d47a1;color:#fff;padding:11px 14px;font-weight:700;display:flex;align-items:center;justify-content:space-between}.ai-editor-header button{border:0;background:transparent;color:#fff;font-size:20px;line-height:1;cursor:pointer}.ai-editor-body{padding:12px}.ai-editor-help{font-size:11px;line-height:1.45;background:#f1f6ff;color:#31445f;padding:9px;border-radius:6px;margin-bottom:9px}.ai-editor-selection{font-size:11px;color:#0d47a1;font-weight:700;margin-bottom:7px}.ai-editor-input{width:100%;min-height:64px;resize:vertical;border:1px solid #9eb7de;border-radius:6px;padding:8px;font:12px system-ui,sans-serif}.ai-editor-actions{display:flex;gap:8px;margin-top:8px}.ai-editor-actions button{border:0;border-radius:6px;padding:8px 11px;font-weight:700;cursor:pointer}.ai-editor-apply{background:#0d47a1;color:#fff}.ai-editor-reset{background:#eef2f7;color:#31445f}.ai-editor-status{font-size:11px;line-height:1.35;margin-top:8px;min-height:15px;color:#52616f}.ai-editor-status.error{color:#b3261e}
-.ai-editing .controlled-symbol,.ai-editing .thai-native-symbol{pointer-events:auto;cursor:grab;outline:1px dashed transparent}.ai-editing .controlled-symbol:hover,.ai-editing .thai-native-symbol:hover{outline-color:#0d47a1}.ai-editing .editor-selected{outline:2px solid #0d47a1!important;box-shadow:0 0 0 2px rgba(13,71,161,.2)}.ai-editing .controlled-symbol:active,.ai-editing .thai-native-symbol:active{cursor:grabbing}
+.ai-editing .controlled-symbol,.ai-editing .thai-native-symbol,.ai-editing .country-text-field{pointer-events:auto;cursor:grab;outline:1px dashed transparent}.ai-editing .controlled-symbol:hover,.ai-editing .thai-native-symbol:hover,.ai-editing .country-text-field:hover{outline-color:#0d47a1}.ai-editing .editor-selected{outline:2px solid #0d47a1!important;box-shadow:0 0 0 2px rgba(13,71,161,.2)}.ai-editing .controlled-symbol:active,.ai-editing .thai-native-symbol:active,.ai-editing .country-text-field:active{cursor:grabbing}
 @media(max-width:850px){.preview-workspace{flex-direction:column;align-items:center}.layer-panel{width:min(100%,420px)}}
 </style>
 </head><body>
@@ -400,6 +400,7 @@ async function generate(){
       h+='</div>';preview.innerHTML=h;addLog(data.error,true);return;}
     data._editorOriginalSymbols=(data.symbols||[]).map(symbol=>({...symbol}));
     data._editorOriginalThaiY=data._thaiRenderedY;
+    data._editorOriginalCountryRegion=data.country_text_region?{...data.country_text_region}:null;
     selectedEditorAsset='';editorStatus='';
     await suggestCdlmSelection(data.inferred_context||{});
     const countryText=await getCountryLabelText();
@@ -461,7 +462,7 @@ function renderLabel(data,countryText=''){
     const tx=(countryRegion.x*100).toFixed(2),ty=(countryRegion.y*100).toFixed(2);
     const tw=(countryRegion.w*100).toFixed(2),th=(countryRegion.h*100).toFixed(2);
     const fontPx=Math.max(8,Math.min(18,Number(countryRegion.font_size||2.8)*SCALE));
-    html+=`<div class="country-text-field" data-preview-artwork contenteditable="true" role="textbox" aria-multiline="true" aria-label="Country-specific label text" title="Paste Word text here; bold, italic, font size, and font family are retained" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateCountryText(this)" onpaste="pasteCountryText(event)">${data._countryHtml||'<span style="color:#777">Country-specific label text</span>'}</div>`;
+    html+=`<div class="country-text-field" data-preview-artwork data-editor-country contenteditable="true" role="textbox" aria-multiline="true" aria-label="Country-specific label text" title="Paste Word text here; bold, italic, font size, and font family are retained" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateCountryText(this)" onpaste="pasteCountryText(event)">${data._countryHtml||'<span style="color:#777">Country-specific label text</span>'}</div>`;
   }
   (data.reference_graphics||[]).forEach(graphic=>{
     if(!graphic.image)return;
@@ -561,7 +562,7 @@ function buildAiEditor(){
   return `<section class="ai-editor" aria-label="AI label editor">
     <div class="ai-editor-header"><span>✨ AI Label Editor</span><button type="button" aria-label="Close AI editor" onclick="toggleAiEditor()">×</button></div>
     <div class="ai-editor-body">
-      <div class="ai-editor-help">Click a symbol to select it, then drag it on the label. Or describe an edit:<br>• “increase 100025 by 20%”<br>• “move INMETRO right 2 mm”<br>• “set 100183 width to 16 mm”</div>
+      <div class="ai-editor-help">Drag a symbol or the country-text box directly on the label. Close this editor to type in the text box. Or describe a symbol edit:<br>• “increase 100025 by 20%”<br>• “move INMETRO right 2 mm”<br>• “set 100183 width to 16 mm”</div>
       <div class="ai-editor-selection">Selected: ${selected}</div>
       <textarea id="aiEditCommand" class="ai-editor-input" aria-label="Describe a label edit" placeholder="Describe a symbol size or position edit…"></textarea>
       <div class="ai-editor-actions"><button type="button" class="ai-editor-apply" onclick="applyAiEdit()">Apply edit</button><button type="button" class="ai-editor-reset" onclick="resetAiEdits()">Reset symbols</button></div>
@@ -687,6 +688,28 @@ function wireSymbolEditor(){
       window.addEventListener('pointermove',move);window.addEventListener('pointerup',end,{once:true});
     });
   });
+  const countryField=document.querySelector('[data-editor-country]');
+  if(countryField&&!countryField.dataset.editorWired){
+    countryField.dataset.editorWired='true';
+    countryField.addEventListener('pointerdown',event=>{
+      if(!aiEditorOpen)return;
+      const region=lastRender?.data?.country_text_region;
+      const label=document.querySelector('.label-container');
+      if(!region||!label)return;
+      event.preventDefault();
+      const startX=event.clientX,startY=event.clientY,originX=Number(region.x),originY=Number(region.y);
+      const move=moveEvent=>{
+        region.x=Math.max(0,Math.min(1-region.w,originX+(moveEvent.clientX-startX)/label.clientWidth));
+        region.y=Math.max(0,Math.min(1-region.h,originY+(moveEvent.clientY-startY)/label.clientHeight));
+        countryField.style.left=`${(region.x*100).toFixed(2)}%`;countryField.style.top=`${(region.y*100).toFixed(2)}%`;
+      };
+      const end=()=>{
+        window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',end);
+        refreshAfterEditorChange('Country-specific text box moved by drag and drop.');
+      };
+      window.addEventListener('pointermove',move);window.addEventListener('pointerup',end,{once:true});
+    });
+  }
   if(selectedEditorAsset)selectEditorSymbol(selectedEditorAsset);
 }
 function renderedCountryTextBottom(field){
