@@ -16,7 +16,9 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .btn{width:100%;padding:12px;background:#0d47a1;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;margin-top:12px}
 .btn:disabled{opacity:.3}
 .btn:hover:not(:disabled){background:#093080}
-.preview{flex:1;overflow:auto;padding:20px;display:flex;flex-direction:column;align-items:center;background:#fafbfc}
+.preview{flex:1;overflow:auto;padding:20px;background:#fafbfc}
+.preview-workspace{width:min(100%,1120px);margin:0 auto;display:flex;align-items:flex-start;justify-content:center;gap:22px}
+.preview-canvas{display:flex;flex-direction:column;align-items:center;min-width:0}
 .label-container{position:relative;border:2px solid #1a73e8;border-radius:4px;box-shadow:0 2px 12px rgba(0,0,0,.1);background:#fff}
 .label-container .blank-label-border{position:absolute;inset:0;border:1px solid #222;pointer-events:none;z-index:1}
 .label-container .template-base{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}
@@ -39,6 +41,10 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 .toggle{display:flex;align-items:center;gap:6px;margin:8px 0;font-size:11px}
 .toggle input{cursor:pointer}
 .format-tools{display:flex;align-items:center;gap:6px;margin:8px 0;font-size:11px}.format-tools button{border:1px solid #0d47a1;border-radius:5px;background:#fff;color:#0d47a1;padding:5px 8px;font-weight:700;cursor:pointer}.format-tools button:hover{background:#e8f0fe}
+.layer-panel{width:230px;background:#fff;border:1px solid #d9e1ee;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.06);padding:12px;font-size:12px;color:#233}
+.layer-panel h3{font-size:13px;color:#0d47a1;margin-bottom:9px}.layer-note{font-size:10px;line-height:1.35;color:#667;margin:0 0 9px}
+.layer-row{display:flex;align-items:center;gap:7px;padding:5px 3px;border-radius:4px}.layer-row:hover{background:#f1f6ff}.layer-row input{accent-color:#0d47a1}.layer-row.child{padding-left:23px}.layer-row.grandchild{padding-left:42px}.layer-icon{width:14px;color:#6b7785;text-align:center}.layer-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:850px){.preview-workspace{flex-direction:column;align-items:center}.layer-panel{width:min(100%,420px)}}
 </style>
 </head><body>
 <header>
@@ -88,6 +94,7 @@ header h1{font-size:16px} .tag{background:rgba(255,255,255,.15);padding:2px 8px;
 </div>
 <script>
 let catalog=[], blankLabels=[], drawingCatalog=[], currentId='', lastRender=null, cdlmSessionId='', cdlmLocationHint='';
+let previewLayerState={frame:true,outline:true,artwork:true,symbols:{}};
 
 async function loadCatalog(){
   try{
@@ -414,14 +421,15 @@ function renderLabel(data,countryText=''){
   const SCALE=3.5;
   const wPx=data.w_mm*SCALE;
   const hPx=data.h_mm*SCALE;
-  let html=`<div class="label-container" style="width:${wPx}px;height:${hPx}px;">`;
+  previewLayerState={frame:true,outline:true,artwork:true,symbols:{}};
+  let html=`<div class="preview-workspace"><div class="preview-canvas"><div class="label-container" style="width:${wPx}px;height:${hPx}px;">`;
   const hasTemplateArtwork=Boolean(data.label_image);
   const cleanRender=Boolean(data.layout_manifest&&data.layout_manifest.blank_label&&data.layout_manifest.blank_label.clean_render);
   if(cleanRender){
     const radius=Number(data.layout_manifest.blank_label.corner_radius_mm||0)*SCALE;
-    html+=`<div class="blank-label-border" style="border-radius:${radius}px"></div>`;
+    html+=`<div class="blank-label-border" data-preview-outline style="border-radius:${radius}px"></div>`;
   }else if(hasTemplateArtwork){
-    html+=`<img class="template-base" alt="Source label artwork" src="data:image/png;base64,${data.label_image}">`;
+    html+=`<img class="template-base" data-preview-artwork alt="Source label artwork" src="data:image/png;base64,${data.label_image}">`;
   }
   // The reference PDF supplies the controlled layout.  Cover each reference
   // symbol and repaint it with the approved symbol asset at the same position.
@@ -431,36 +439,39 @@ function renderLabel(data,countryText=''){
     const imgData=(data.symbol_images||{})[sym.asset];
     if(!imgData)return;
     if(cleanRender){
-      html+=`<div class="controlled-symbol" data-controlled-asset="${escapeHtml(sym.asset)}" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Matched symbol ${escapeHtml(sym.code||'')}" src="data:image/png;base64,${imgData}"></div>`;
+      previewLayerState.symbols[sym.asset]=true;
+      html+=`<div class="controlled-symbol" data-controlled-asset="${escapeHtml(sym.asset)}" data-preview-symbol="${escapeHtml(sym.asset)}" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Matched symbol ${escapeHtml(sym.code||'')}" src="data:image/png;base64,${imgData}"></div>`;
       return;
     }
     const sourceX=Number(sym.source_x??sym.x),sourceY=Number(sym.source_y??sym.y);
     const sourceW=Number(sym.source_w??sym.w),sourceH=Number(sym.source_h??sym.h);
     const maskPad=0.007;
-    html+=`<div class="controlled-source-mask" style="left:${((sourceX-maskPad)*100).toFixed(2)}%;top:${((sourceY-maskPad)*100).toFixed(2)}%;width:${((sourceW+2*maskPad)*100).toFixed(2)}%;height:${((sourceH+2*maskPad)*100).toFixed(2)}%"></div>`;
-    html+=`<div class="controlled-symbol" data-controlled-asset="${escapeHtml(sym.asset)}" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Controlled symbol ${escapeHtml(sym.code||'')}" src="data:image/png;base64,${imgData}"></div>`;
+    previewLayerState.symbols[sym.asset]=true;
+    html+=`<div class="controlled-source-mask" data-preview-artwork style="left:${((sourceX-maskPad)*100).toFixed(2)}%;top:${((sourceY-maskPad)*100).toFixed(2)}%;width:${((sourceW+2*maskPad)*100).toFixed(2)}%;height:${((sourceH+2*maskPad)*100).toFixed(2)}%"></div>`;
+    html+=`<div class="controlled-symbol" data-controlled-asset="${escapeHtml(sym.asset)}" data-preview-symbol="${escapeHtml(sym.asset)}" style="left:${(sym.x*100).toFixed(2)}%;top:${(sym.y*100).toFixed(2)}%;width:${(sym.w*100).toFixed(2)}%;height:${(sym.h*100).toFixed(2)}%"><img alt="Controlled symbol ${escapeHtml(sym.code||'')}" src="data:image/png;base64,${imgData}"></div>`;
   });
   if(countryRegion){
     const tx=(countryRegion.x*100).toFixed(2),ty=(countryRegion.y*100).toFixed(2);
     const tw=(countryRegion.w*100).toFixed(2),th=(countryRegion.h*100).toFixed(2);
     const fontPx=Math.max(8,Math.min(18,Number(countryRegion.font_size||2.8)*SCALE));
-    html+=`<div class="country-text-field" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Country-specific label text" title="Paste Word text here; bold, italic, font size, and font family are retained" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateCountryText(this)" onpaste="pasteCountryText(event)">${data._countryHtml||'<span style="color:#777">Country-specific label text</span>'}</div>`;
+    html+=`<div class="country-text-field" data-preview-artwork contenteditable="true" role="textbox" aria-multiline="true" aria-label="Country-specific label text" title="Paste Word text here; bold, italic, font size, and font family are retained" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateCountryText(this)" onpaste="pasteCountryText(event)">${data._countryHtml||'<span style="color:#777">Country-specific label text</span>'}</div>`;
   }
   (data.reference_graphics||[]).forEach(graphic=>{
     if(!graphic.image)return;
-    html+=`<img class="reference-graphic" alt="Reference-label graphic" src="data:image/png;base64,${graphic.image}" style="left:${(graphic.x*100).toFixed(2)}%;top:${(graphic.y*100).toFixed(2)}%;width:${(graphic.w*100).toFixed(2)}%;height:${(graphic.h*100).toFixed(2)}%">`;
+    html+=`<img class="reference-graphic" data-preview-artwork alt="Reference-label graphic" src="data:image/png;base64,${graphic.image}" style="left:${(graphic.x*100).toFixed(2)}%;top:${(graphic.y*100).toFixed(2)}%;width:${(graphic.w*100).toFixed(2)}%;height:${(graphic.h*100).toFixed(2)}%">`;
   });
   const thaiSymbol=(data.symbols||[]).find(sym=>sym.code==='100183'&&sym.specification);
   const thaiRegion=data.thai_symbol_region;
   if(thaiSymbol&&thaiRegion){
+    previewLayerState.symbols[thaiSymbol.asset]=true;
     if(cleanRender){
       const tx=(thaiRegion.x*100).toFixed(2),ty=(thaiRegion.y*100).toFixed(2);
       const tw=(thaiRegion.w*100).toFixed(2),th=(thaiRegion.h*100).toFixed(2);
       const fontPx=Math.max(6,Number(thaiRegion.font_size||1.7)*SCALE);
       if(data._thaiSymbolEditing||data._thaiSymbolText){
-        html+=`<div class="thai-symbol-edit" contenteditable="true" role="textbox" aria-label="Thai FDA notification number" title="Thai FDA notification number" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateThaiSymbolText(this)">${escapeHtml(data._thaiSymbolText||'')}</div>`;
+        html+=`<div class="thai-symbol-edit" data-preview-symbol="${escapeHtml(thaiSymbol.asset)}" contenteditable="true" role="textbox" aria-label="Thai FDA notification number" title="Thai FDA notification number" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateThaiSymbolText(this)">${escapeHtml(data._thaiSymbolText||'')}</div>`;
       }else{
-        html+=`<button class="thai-symbol-hotspot" type="button" aria-label="Edit Thai FDA notification number" title="Click to replace the Thai FDA notification number" onclick="startThaiSymbolEdit()" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%"></button>`;
+      html+=`<button class="thai-symbol-hotspot" data-preview-symbol="${escapeHtml(thaiSymbol.asset)}" type="button" aria-label="Edit Thai FDA notification number" title="Click to replace the Thai FDA notification number" onclick="startThaiSymbolEdit()" style="left:${tx}%;top:${ty}%;width:${tw}%;height:${th}%"></button>`;
       }
     }else{
     const renderedThaiY=Number.isFinite(data._thaiRenderedY)?data._thaiRenderedY:thaiSymbol.y;
@@ -470,23 +481,61 @@ function renderLabel(data,countryText=''){
     const cropWidth=(100/thaiSymbol.w).toFixed(2),cropHeight=(100/thaiSymbol.h).toFixed(2);
     const cropLeft=(-thaiSymbol.x/thaiSymbol.w*100).toFixed(2),cropTop=(-thaiSymbol.y/thaiSymbol.h*100).toFixed(2);
     html+=`<div class="thai-source-mask" style="left:${sourceX}%;top:${sourceY}%;width:${sourceW}%;height:${sourceH}%"></div>`;
-    html+=`<div class="thai-native-symbol" data-thai-offset="0" style="left:${sourceX}%;top:${(renderedThaiY*100).toFixed(2)}%;width:${sourceW}%;height:${sourceH}%"><img alt="Thai FDA symbol" src="data:image/png;base64,${data.label_image}" style="width:${cropWidth}%;height:${cropHeight}%;left:${cropLeft}%;top:${cropTop}%"></div>`;
+    html+=`<div class="thai-native-symbol" data-preview-symbol="${escapeHtml(thaiSymbol.asset)}" data-thai-offset="0" style="left:${sourceX}%;top:${(renderedThaiY*100).toFixed(2)}%;width:${sourceW}%;height:${sourceH}%"><img alt="Thai FDA symbol" src="data:image/png;base64,${data.label_image}" style="width:${cropWidth}%;height:${cropHeight}%;left:${cropLeft}%;top:${cropTop}%"></div>`;
     const tx=(thaiRegion.x*100).toFixed(2),ty=(thaiRegion.y*100).toFixed(2);
     const tw=(thaiRegion.w*100).toFixed(2),th=(thaiRegion.h*100).toFixed(2);
     const fontPx=Math.max(6,Number(thaiRegion.font_size||1.7)*SCALE);
     const editableTop=((renderedThaiY+numberOffset)*100).toFixed(2);
     if(data._thaiSymbolEditing||data._thaiSymbolText){
-      html+=`<div class="thai-symbol-edit" data-thai-offset="${numberOffset}" contenteditable="true" role="textbox" aria-label="Thai FDA notification number" title="Thai FDA notification number" style="left:${tx}%;top:${editableTop}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateThaiSymbolText(this)">${escapeHtml(data._thaiSymbolText||'')}</div>`;
+      html+=`<div class="thai-symbol-edit" data-preview-symbol="${escapeHtml(thaiSymbol.asset)}" data-thai-offset="${numberOffset}" contenteditable="true" role="textbox" aria-label="Thai FDA notification number" title="Thai FDA notification number" style="left:${tx}%;top:${editableTop}%;width:${tw}%;height:${th}%;font-size:${fontPx}px" oninput="updateThaiSymbolText(this)">${escapeHtml(data._thaiSymbolText||'')}</div>`;
     }else{
-      html+=`<button class="thai-symbol-hotspot" data-thai-offset="${numberOffset}" type="button" aria-label="Edit Thai FDA notification number" title="Click to replace the Thai FDA notification number" onclick="startThaiSymbolEdit()" style="left:${tx}%;top:${editableTop}%;width:${tw}%;height:${th}%"></button>`;
+      html+=`<button class="thai-symbol-hotspot" data-preview-symbol="${escapeHtml(thaiSymbol.asset)}" data-thai-offset="${numberOffset}" type="button" aria-label="Edit Thai FDA notification number" title="Click to replace the Thai FDA notification number" onclick="startThaiSymbolEdit()" style="left:${tx}%;top:${editableTop}%;width:${tw}%;height:${th}%"></button>`;
     }
     }
   }
+  html+=`</div><div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div></div>`;
+  html+=buildPreviewLayerPanel(data);
   html+=`</div>`;
-  html+=`<div class="meta">${data.label_size} | ${data.symbols_placed} symbols | B&W</div>`;
   preview.innerHTML=html;
   requestAnimationFrame(()=>{fitCountryText();syncTextSymbolClearance();});
   return Boolean(countryText&&countryRegion);
+}
+function buildPreviewLayerPanel(data){
+  const symbolRows=(data.symbols||[]).filter(symbol=>previewLayerState.symbols[symbol.asset]!==undefined).map((symbol,index)=>{
+    const label=escapeHtml(symbol.code?`Symbol ${symbol.code}`:`Symbol ${symbol.asset||index+1}`);
+    const asset=escapeHtml(symbol.asset);
+    return `<label class="layer-row grandchild" title="Show or hide ${label}"><input type="checkbox" checked onchange="setPreviewSymbolLayer('${asset}',this.checked)"><span class="layer-icon">▧</span><span class="layer-name">${label}</span></label>`;
+  }).join('');
+  return `<aside class="layer-panel" aria-label="Preview layers">
+    <h3>Preview layers</h3>
+    <p class="layer-note">Toggle visibility here before downloading. SVG export keeps the same layer structure for Illustrator.</p>
+    <label class="layer-row"><input type="checkbox" checked onchange="setPreviewLayer('frame',this.checked)"><span class="layer-icon">□</span><span class="layer-name">Drawing Frame</span></label>
+    <label class="layer-row"><input type="checkbox" checked onchange="setPreviewLayer('outline',this.checked)"><span class="layer-icon">▭</span><span class="layer-name">Outline of Label</span></label>
+    <label class="layer-row"><input type="checkbox" checked onchange="setPreviewLayer('artwork',this.checked)"><span class="layer-icon">▣</span><span class="layer-name">Artwork (Content of the Label)</span></label>
+    <div class="layer-row child"><span class="layer-icon">↳</span><span class="layer-name">Reference text &amp; graphics</span></div>
+    <div class="layer-row child"><span class="layer-icon">⌄</span><span class="layer-name">Symbols</span></div>
+    ${symbolRows||'<div class="layer-row grandchild"><span class="layer-name">No matched symbol layers</span></div>'}
+  </aside>`;
+}
+function setPreviewLayer(layer,visible){
+  previewLayerState[layer]=visible;
+  const selector=layer==='frame'?'.label-container':layer==='outline'?'[data-preview-outline]':'[data-preview-artwork]';
+  document.querySelectorAll(selector).forEach(element=>{
+    if(layer==='frame')element.style.background=visible?'#fff':'transparent';
+    else element.style.visibility=visible?'visible':'hidden';
+  });
+  if(layer==='artwork'){
+    document.querySelectorAll('[data-preview-symbol]').forEach(element=>{
+      const asset=element.dataset.previewSymbol;
+      element.style.visibility=visible&&previewLayerState.symbols[asset]?'visible':'hidden';
+    });
+  }
+}
+function setPreviewSymbolLayer(asset,visible){
+  previewLayerState.symbols[asset]=visible;
+  document.querySelectorAll(`[data-preview-symbol="${CSS.escape(asset)}"]`).forEach(element=>{
+    element.style.visibility=visible&&previewLayerState.artwork?'visible':'hidden';
+  });
 }
 function renderedCountryTextBottom(field){
   const range=document.createRange();
