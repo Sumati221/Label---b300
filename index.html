@@ -544,6 +544,12 @@ function blobAsDataUrl(blob){
   });
 }
 
+function svgTextEsc(value){
+  return String(value||'').replace(/[&<>"']/g,character=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'
+  }[character]));
+}
+
 async function downloadLabelSvg(){
   if(!lastRender)return;
   const data=lastRender.data;
@@ -553,10 +559,14 @@ async function downloadLabelSvg(){
   const embeddedPng=await blobAsDataUrl(await response.blob());
   const pxPerMm=96/25.4;
   const width=Math.round(Number(data.w_mm)*pxPerMm),height=Math.round(Number(data.h_mm)*pxPerMm);
-  // Adobe Illustrator does not support browser-only SVG foreignObject markup.
-  // Embed the same server-rendered PNG used by the PNG download in SVG 1.1.
-  // This yields an interoperable physical-size SVG and preserves every edit.
-  const svg=`<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="${data.w_mm}mm" height="${data.h_mm}mm" viewBox="0 0 ${width} ${height}">\n  <title>${data.label_id||'Generated label'}</title>\n  <image x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none" xlink:href="${embeddedPng}"/>\n</svg>\n`;
+  const blankLabel=(data.layout_manifest&&data.layout_manifest.blank_label)||{};
+  const cornerRadius=Math.max(0,Number(blankLabel.corner_radius_mm||0)*pxPerMm).toFixed(2);
+  const borderWidth=Math.max(1,0.25*pxPerMm).toFixed(2);
+  const title=svgTextEsc(data.label_id||'Generated label');
+  // Use SVG 1.1 only: Illustrator rejects browser-only foreignObject content.
+  // Top-level groups are named layers in Illustrator and Inkscape. The artwork
+  // remains the exact server-rendered output, avoiding a preview/export mismatch.
+  const svg=`<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" version="1.1" width="${data.w_mm}mm" height="${data.h_mm}mm" viewBox="0 0 ${width} ${height}">\n  <title>${title}</title>\n  <desc>Three-layer label export: Drawing Frame, Outline of Label, Artwork (Content of the Label).</desc>\n  <g id="Drawing_Frame" inkscape:groupmode="layer" inkscape:label="Drawing Frame" data-layer-name="Drawing Frame">\n    <rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff"/>\n  </g>\n  <g id="Outline_of_Label" inkscape:groupmode="layer" inkscape:label="Outline of Label" data-layer-name="Outline of Label">\n    <rect x="${Number(borderWidth)/2}" y="${Number(borderWidth)/2}" width="${Math.max(1,width-Number(borderWidth))}" height="${Math.max(1,height-Number(borderWidth))}" rx="${cornerRadius}" ry="${cornerRadius}" fill="none" stroke="#000000" stroke-width="${borderWidth}"/>\n  </g>\n  <g id="Artwork_Content_of_the_Label" inkscape:groupmode="layer" inkscape:label="Artwork (Content of the Label)" data-layer-name="Artwork (Content of the Label)">\n    <image id="Label_Artwork" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none" xlink:href="${embeddedPng}"/>\n  </g>\n</svg>\n`;
   downloadBlob(new Blob([svg],{type:'image/svg+xml;charset=utf-8'}),`${data.label_id||'label'}.svg`);
 }
 
